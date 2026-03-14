@@ -11,10 +11,10 @@ interface PriceChartProps {
   data: ChartDataPoint[];
   pins?: PinMarker[];
   range?: number;
-  dailyData?: ChartDataPoint[]; // 사용하지 않지만 호환성 유지
+  dailyData?: ChartDataPoint[];
 }
 
-/** 이동평균 계산 — 현재 차트 캔들 기준 */
+/** 이동평균 계산 */
 function calcMA(data: { time: number; value: number }[], period: number) {
   const result: { time: any; value: number }[] = [];
   for (let i = period - 1; i < data.length; i++) {
@@ -26,20 +26,27 @@ function calcMA(data: { time: number; value: number }[], period: number) {
 }
 
 /**
- * 차트 기간에 따라 MA 라벨 접미사 반환
- * 1D/1W/1M → 분/시간봉 기준, 3M/1Y → 일봉, 5Y → 주봉, ALL → 월봉
+ * MA 표시 가능 여부:
+ * - 일봉 이상 (range >= 90일)에서만 MA 표시
+ * - 분봉/시간봉에서는 MA가 의미 없으므로 숨김
  */
+function canShowMA(rangeDays: number): boolean {
+  return rangeDays >= 90;
+}
+
+/** 차트 기간에 따른 MA 라벨 */
 function getMALabel(period: number, rangeDays: number): string {
-  if (rangeDays >= 1825) return `MA${period}주`;
   if (rangeDays >= 3650) return `MA${period}월`;
-  if (rangeDays >= 90) return `MA${period}일`;
-  return `MA${period}`;
+  if (rangeDays >= 1825) return `MA${period}주`;
+  return `MA${period}일`;
 }
 
 export default function PriceChart({ data, pins = [], range = 7 }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
   const { detailedChart, maLines, setCrosshair, setPinPoint } = useAppStore();
+
+  const showMA = detailedChart && canShowMA(range);
 
   useEffect(() => {
     if (!containerRef.current || !data.length) return;
@@ -87,19 +94,13 @@ export default function PriceChart({ data, pins = [], range = 7 }: PriceChartPro
     });
     areaSeries.setData(data.map((d) => ({ time: d.time as any, value: d.value })));
 
-    // 이동평균선 — detailedChart 모드에서만 표시
-    // 토스처럼 현재 캔들 기준으로 MA 계산 (일봉→N일, 주봉→N주, 월봉→N월)
-    if (detailedChart) {
+    // 이동평균선 — 일봉 이상(3M+)에서만 표시
+    if (showMA) {
       const priceData = data.map((d) => ({ time: d.time, value: d.value }));
       const enabledMAs = maLines.filter((m) => m.enabled);
 
       for (const ma of enabledMAs) {
-        // 데이터의 최소 40% 이상이 MA 라인으로 그려져야 의미 있음
-        // 예: 데이터 130개에 MA120 → 10개만 그려짐 → 숨김
-        const minDataRatio = 0.4;
-        const maResultCount = priceData.length - ma.period;
-        if (maResultCount < priceData.length * minDataRatio) continue;
-
+        if (ma.period >= priceData.length) continue;
         const maData = calcMA(priceData, ma.period);
         if (maData.length > 0) {
           const maSeries = chart.addSeries(LineSeries, {
@@ -148,15 +149,11 @@ export default function PriceChart({ data, pins = [], range = 7 }: PriceChartPro
     chart.timeScale().fitContent();
 
     return () => { ro.disconnect(); chart.remove(); chartRef.current = null; };
-  }, [data, pins, range, detailedChart, maLines, setCrosshair, setPinPoint]);
+  }, [data, pins, range, showMA, maLines, setCrosshair, setPinPoint]);
 
-  // MA legend — 표시 가능한 MA만 보여줌
-  const visibleMAs = detailedChart
-    ? maLines.filter((m) => {
-        if (!m.enabled) return false;
-        const maResultCount = data.length - m.period;
-        return maResultCount >= data.length * 0.4;
-      })
+  // 표시 가능한 MA 목록
+  const visibleMAs = showMA
+    ? maLines.filter((m) => m.enabled && m.period < data.length)
     : [];
 
   return (
@@ -177,6 +174,11 @@ export default function PriceChart({ data, pins = [], range = 7 }: PriceChartPro
               {getMALabel(ma.period, range)}
             </span>
           ))}
+        </div>
+      )}
+      {detailedChart && !canShowMA(range) && (
+        <div className="absolute top-3 left-3 z-10 rounded-full px-2.5 py-1 text-[10px] text-zinc-500 bg-black/50 backdrop-blur-sm border border-white/[0.08] pointer-events-none">
+          이동평균선은 3M 이상에서 표시됩니다
         </div>
       )}
       <div ref={containerRef} className="w-full h-[340px] md:h-[400px]" />
