@@ -26,8 +26,10 @@ export default function ChartDetailPage() {
 
   const { range, crosshair, pinPoint, setRange, setCurrentAsset, openMemoModal } = useAppStore();
   const [chartData, setChartData] = useState<any[]>([]);
+  const [dailyData, setDailyData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [memos, setMemos] = useState<any[]>([]);
+  const { detailedChart } = useAppStore();
 
   useEffect(() => {
     if (asset) setCurrentAsset(asset);
@@ -46,7 +48,18 @@ export default function ChartDetailPage() {
     setLoading(false);
   }, [asset, range]);
 
+  // 일봉 데이터 (MA 계산용)
+  const loadDailyData = useCallback(async () => {
+    if (!asset || !detailedChart) return;
+    try {
+      const res = await fetch(`/api/market?type=${asset.type}&symbol=${asset.symbol}&days=365`);
+      const data = await res.json();
+      setDailyData(Array.isArray(data) ? data : []);
+    } catch { setDailyData([]); }
+  }, [asset, detailedChart]);
+
   useEffect(() => { loadChart(); }, [loadChart]);
+  useEffect(() => { loadDailyData(); }, [loadDailyData]);
 
   const priceInfo = useMemo(() => {
     if (!chartData.length) return { price: 0, change: 0, pct: 0 };
@@ -151,7 +164,7 @@ export default function ChartDetailPage() {
             시세 불러오는 중...
           </div>
         )}
-        {chartData.length > 0 && <PriceChart data={chartData} pins={chartPins} range={range} />}
+        {chartData.length > 0 && <PriceChart data={chartData} pins={chartPins} range={range} dailyData={dailyData} />}
       </div>
 
       {/* Pin bar */}

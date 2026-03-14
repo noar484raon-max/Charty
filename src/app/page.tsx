@@ -44,6 +44,7 @@ export default function HomePage() {
   const { showToast } = useToast();
   const { assetType, currentAsset, range, crosshair, pinPoint, detailedChart, setAssetType, setCurrentAsset, setRange, setDetailedChart, openMemoModal } = useAppStore();
   const [chartData, setChartData] = useState<any[]>([]);
+  const [dailyData, setDailyData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [memos, setMemos] = useState<MemoItem[]>([]);
   const [memosLoading, setMemosLoading] = useState(false);
@@ -75,7 +76,7 @@ export default function HomePage() {
     ).slice(0, 8);
   }, [searchQuery]);
 
-  // Fetch chart data
+  // Fetch chart data + daily data for MA calculation
   const loadChart = useCallback(async () => {
     setLoading(true);
     try {
@@ -86,7 +87,18 @@ export default function HomePage() {
     setLoading(false);
   }, [currentAsset, range]);
 
+  // 일봉 데이터 (MA 계산용) — 자세한 차트 모드일 때만
+  const loadDailyData = useCallback(async () => {
+    if (!detailedChart) return;
+    try {
+      const res = await fetch(`/api/market?type=${currentAsset.type}&symbol=${currentAsset.symbol}&days=365`);
+      const data = await res.json();
+      setDailyData(Array.isArray(data) ? data : []);
+    } catch { setDailyData([]); }
+  }, [currentAsset, detailedChart]);
+
   useEffect(() => { loadChart(); }, [loadChart]);
+  useEffect(() => { loadDailyData(); }, [loadDailyData]);
 
   // Fetch memos from DB
   const loadMemos = useCallback(async () => {
@@ -379,7 +391,7 @@ export default function HomePage() {
             시세 불러오는 중...
           </div>
         )}
-        {chartData.length > 0 && <PriceChart data={chartData} pins={chartPins} range={range} />}
+        {chartData.length > 0 && <PriceChart data={chartData} pins={chartPins} range={range} dailyData={dailyData} />}
       </div>
 
       {/* Pin bar */}

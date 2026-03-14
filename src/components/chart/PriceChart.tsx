@@ -3,7 +3,6 @@
 import { useEffect, useRef } from "react";
 import { createChart, AreaSeries, HistogramSeries, LineSeries } from "lightweight-charts";
 import { useAppStore } from "@/stores/app-store";
-import type { MALine } from "@/stores/app-store";
 
 type ChartDataPoint = { time: number; value: number; volume: number };
 type PinMarker = { time: number; sentiment: string; username: string };
@@ -11,10 +10,11 @@ type PinMarker = { time: number; sentiment: string; username: string };
 interface PriceChartProps {
   data: ChartDataPoint[];
   pins?: PinMarker[];
-  range?: number; // 현재 선택된 기간 (일 수)
+  range?: number;
+  dailyData?: ChartDataPoint[]; // 일봉 데이터 (MA 계산용)
 }
 
-/** 이동평균 계산 */
+/** 이동평균 계산 (일봉 기준) */
 function calcMA(data: { time: number; value: number }[], period: number) {
   const result: { time: any; value: number }[] = [];
   for (let i = period - 1; i < data.length; i++) {
@@ -26,17 +26,31 @@ function calcMA(data: { time: number; value: number }[], period: number) {
 }
 
 /**
- * 기간(range)에 따라 하루당 데이터 포인트 수를 반환
- * MA 기간(일 단위)을 실제 데이터 포인트 수로 변환하는 데 사용
+ * 일봉 MA 데이터를 인트라데이 차트 시간축에 매핑
+ * 일봉 MA 값을 해당 날짜의 인트라데이 포인트에 연결
  */
-function getPointsPerDay(rangeDays: number): number {
-  if (rangeDays <= 1) return 78;    // 5분 간격: 6.5시간 × 12
-  if (rangeDays <= 7) return 26;    // 15분 간격: 6.5시간 × 4
-  if (rangeDays <= 30) return 7;    // 1시간 간격: ~7
-  return 1;                          // 일봉 이상: 1포인트 = 1일
+function mapDailyMAToChartTime(
+  maData: { time: any; value: number }[],
+  chartData: ChartDataPoint[]
+): { time: any; value: number }[] {
+  if (!maData.length || !chartData.length) return [];
+
+  const result: { time: any; value: number }[] = [];
+  let maIdx = 0;
+
+  for (const point of chartData) {
+    // 차트 포인트의 날짜에 해당하는 MA 값 찾기
+    while (maIdx < maData.length - 1 && maData[maIdx + 1].time <= point.time) {
+      maIdx++;
+    }
+    if (maIdx < maData.length) {
+      result.push({ time: point.time as any, value: maData[maIdx].value });
+    }
+  }
+  return result;
 }
 
-export default function PriceChart({ data, pins = [], range = 7 }: PriceChartProps) {
+export default function PriceChart({ data, pins = [], range = 7, dailyData = [] }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
   const { detailedChart, maLines, setCrosshair, setPinPoint } = useAppStore();
@@ -89,16 +103,29 @@ export default function PriceChart({ data, pins = [], range = 7 }: PriceChartPro
 
     // 이동평균선 — detailedChart 모드에서만 표시
     if (detailedChart) {
-      const priceData = data.map((d) => ({ time: d.time, value: d.value }));
-      const pointsPerDay = getPointsPerDay(range);
       const enabledMAs = maLines.filter((m) => m.enabled);
+      const isIntraday = range < 90; // 3개월 미만은 인트라데이/시간봉
+
+      // MA 계산에 사용할 데이터 결정
+      // - 일봉 데이터가 있으면 그걸로 MA 계산 (정확한 X일 이동평균)
+      // - 없으면 (또는 일봉 이상 기간이면) 차트 데이터 그대로 사용
+      const maSourceData = (isIntraday && dailyData.length > 0)
+        ? dailyData.map((d) => ({ time: d.time, value: d.value }))
+        : data.map((d) => ({ time: d.time, value: d.value }));
+
       for (const ma of enabledMAs) {
-        // MA 기간(일)을 실제 데이터 포인트 수로 변환
-        const scaledPeriod = Math.round(ma.period * pointsPerDay);
-        // 데이터 포인트의 최소 30%는 MA 외 영역이어야 의미 있음
-        if (scaledPeriod >= priceData.length * 0.7) continue;
-        const maData = calcMA(priceData, scaledPeriod);
-        if (maData.length > 0) {
+        // 데이터가 충분한지 체크
+        if (ma.period > maSourceData.length) continue;
+
+        const maData = calcMA(maSourceData, ma.period);
+        if (maData.length === 0) continue;
+
+        // 인트라데이 차트에서 일봉 MA를 사용한 경우, 차트 시간축에 매핑
+        const finalMAData = (isIntraday && dailyData.length > 0)
+          ? mapDailyMAToChartTime(maData, data)
+          : maData;
+
+        if (finalMAData.length > 0) {
           const maSeries = chart.addSeries(LineSeries, {
             color: ma.color,
             lineWidth: 1,
@@ -106,7 +133,7 @@ export default function PriceChart({ data, pins = [], range = 7 }: PriceChartPro
             priceLineVisible: false,
             lastValueVisible: false,
           });
-          maSeries.setData(maData);
+          maSeries.setData(finalMAData);
         }
       }
     }
@@ -124,8 +151,6 @@ export default function PriceChart({ data, pins = [], range = 7 }: PriceChartPro
         color: d.value >= (data[i - 1]?.value ?? d.value) ? "rgba(34,197,94,0.25)" : "rgba(239,68,68,0.25)",
       }))
     );
-
-    // Pin markers — v5에서 setMarkers 제거됨, 핀 개수는 JSX 뱃지로 표시
 
     // Events
     chart.subscribeCrosshairMove((param: any) => {
@@ -147,7 +172,7 @@ export default function PriceChart({ data, pins = [], range = 7 }: PriceChartPro
     chart.timeScale().fitContent();
 
     return () => { ro.disconnect(); chart.remove(); chartRef.current = null; };
-  }, [data, pins, range, detailedChart, maLines, setCrosshair, setPinPoint]);
+  }, [data, dailyData, pins, range, detailedChart, maLines, setCrosshair, setPinPoint]);
 
   // MA legend (자세한 차트 모드일 때)
   const enabledMAs = detailedChart ? maLines.filter((m) => m.enabled) : [];
