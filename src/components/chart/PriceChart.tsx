@@ -11,10 +11,10 @@ interface PriceChartProps {
   data: ChartDataPoint[];
   pins?: PinMarker[];
   range?: number;
-  dailyData?: ChartDataPoint[]; // 일봉 데이터 (MA 계산용)
+  dailyData?: ChartDataPoint[]; // 사용하지 않지만 호환성 유지
 }
 
-/** 이동평균 계산 (일봉 기준) */
+/** 이동평균 계산 — 현재 차트 캔들 기준 */
 function calcMA(data: { time: number; value: number }[], period: number) {
   const result: { time: any; value: number }[] = [];
   for (let i = period - 1; i < data.length; i++) {
@@ -26,31 +26,17 @@ function calcMA(data: { time: number; value: number }[], period: number) {
 }
 
 /**
- * 일봉 MA 데이터를 인트라데이 차트 시간축에 매핑
- * 일봉 MA 값을 해당 날짜의 인트라데이 포인트에 연결
+ * 차트 기간에 따라 MA 라벨 접미사 반환
+ * 1D/1W/1M → 분/시간봉 기준, 3M/1Y → 일봉, 5Y → 주봉, ALL → 월봉
  */
-function mapDailyMAToChartTime(
-  maData: { time: any; value: number }[],
-  chartData: ChartDataPoint[]
-): { time: any; value: number }[] {
-  if (!maData.length || !chartData.length) return [];
-
-  const result: { time: any; value: number }[] = [];
-  let maIdx = 0;
-
-  for (const point of chartData) {
-    // 차트 포인트의 날짜에 해당하는 MA 값 찾기
-    while (maIdx < maData.length - 1 && maData[maIdx + 1].time <= point.time) {
-      maIdx++;
-    }
-    if (maIdx < maData.length) {
-      result.push({ time: point.time as any, value: maData[maIdx].value });
-    }
-  }
-  return result;
+function getMALabel(period: number, rangeDays: number): string {
+  if (rangeDays >= 1825) return `MA${period}주`;
+  if (rangeDays >= 3650) return `MA${period}월`;
+  if (rangeDays >= 90) return `MA${period}일`;
+  return `MA${period}`;
 }
 
-export default function PriceChart({ data, pins = [], range = 7, dailyData = [] }: PriceChartProps) {
+export default function PriceChart({ data, pins = [], range = 7 }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
   const { detailedChart, maLines, setCrosshair, setPinPoint } = useAppStore();
@@ -102,30 +88,20 @@ export default function PriceChart({ data, pins = [], range = 7, dailyData = [] 
     areaSeries.setData(data.map((d) => ({ time: d.time as any, value: d.value })));
 
     // 이동평균선 — detailedChart 모드에서만 표시
+    // 토스처럼 현재 캔들 기준으로 MA 계산 (일봉→N일, 주봉→N주, 월봉→N월)
     if (detailedChart) {
+      const priceData = data.map((d) => ({ time: d.time, value: d.value }));
       const enabledMAs = maLines.filter((m) => m.enabled);
-      const isIntraday = range < 90; // 3개월 미만은 인트라데이/시간봉
-
-      // MA 계산에 사용할 데이터 결정
-      // - 일봉 데이터가 있으면 그걸로 MA 계산 (정확한 X일 이동평균)
-      // - 없으면 (또는 일봉 이상 기간이면) 차트 데이터 그대로 사용
-      const maSourceData = (isIntraday && dailyData.length > 0)
-        ? dailyData.map((d) => ({ time: d.time, value: d.value }))
-        : data.map((d) => ({ time: d.time, value: d.value }));
 
       for (const ma of enabledMAs) {
-        // 데이터가 충분한지 체크
-        if (ma.period > maSourceData.length) continue;
+        // 데이터의 최소 40% 이상이 MA 라인으로 그려져야 의미 있음
+        // 예: 데이터 130개에 MA120 → 10개만 그려짐 → 숨김
+        const minDataRatio = 0.4;
+        const maResultCount = priceData.length - ma.period;
+        if (maResultCount < priceData.length * minDataRatio) continue;
 
-        const maData = calcMA(maSourceData, ma.period);
-        if (maData.length === 0) continue;
-
-        // 인트라데이 차트에서 일봉 MA를 사용한 경우, 차트 시간축에 매핑
-        const finalMAData = (isIntraday && dailyData.length > 0)
-          ? mapDailyMAToChartTime(maData, data)
-          : maData;
-
-        if (finalMAData.length > 0) {
+        const maData = calcMA(priceData, ma.period);
+        if (maData.length > 0) {
           const maSeries = chart.addSeries(LineSeries, {
             color: ma.color,
             lineWidth: 1,
@@ -133,7 +109,7 @@ export default function PriceChart({ data, pins = [], range = 7, dailyData = [] 
             priceLineVisible: false,
             lastValueVisible: false,
           });
-          maSeries.setData(finalMAData);
+          maSeries.setData(maData);
         }
       }
     }
@@ -172,10 +148,16 @@ export default function PriceChart({ data, pins = [], range = 7, dailyData = [] 
     chart.timeScale().fitContent();
 
     return () => { ro.disconnect(); chart.remove(); chartRef.current = null; };
-  }, [data, dailyData, pins, range, detailedChart, maLines, setCrosshair, setPinPoint]);
+  }, [data, pins, range, detailedChart, maLines, setCrosshair, setPinPoint]);
 
-  // MA legend (자세한 차트 모드일 때)
-  const enabledMAs = detailedChart ? maLines.filter((m) => m.enabled) : [];
+  // MA legend — 표시 가능한 MA만 보여줌
+  const visibleMAs = detailedChart
+    ? maLines.filter((m) => {
+        if (!m.enabled) return false;
+        const maResultCount = data.length - m.period;
+        return maResultCount >= data.length * 0.4;
+      })
+    : [];
 
   return (
     <div className="relative rounded-2xl border border-white/[0.06] bg-surface overflow-hidden">
@@ -184,15 +166,15 @@ export default function PriceChart({ data, pins = [], range = 7, dailyData = [] 
           📌 {pins.length}개 핀
         </div>
       )}
-      {enabledMAs.length > 0 && (
+      {visibleMAs.length > 0 && (
         <div className="absolute top-3 left-3 z-10 flex items-center gap-2 pointer-events-none">
-          {enabledMAs.map((ma) => (
+          {visibleMAs.map((ma) => (
             <span
               key={ma.period}
               className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold bg-black/50 backdrop-blur-sm border border-white/[0.08]"
             >
               <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ma.color }} />
-              MA{ma.period}
+              {getMALabel(ma.period, range)}
             </span>
           ))}
         </div>
