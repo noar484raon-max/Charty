@@ -11,6 +11,7 @@ type PinMarker = { time: number; sentiment: string; username: string };
 interface PriceChartProps {
   data: ChartDataPoint[];
   pins?: PinMarker[];
+  range?: number; // 현재 선택된 기간 (일 수)
 }
 
 /** 이동평균 계산 */
@@ -24,7 +25,18 @@ function calcMA(data: { time: number; value: number }[], period: number) {
   return result;
 }
 
-export default function PriceChart({ data, pins = [] }: PriceChartProps) {
+/**
+ * 기간(range)에 따라 하루당 데이터 포인트 수를 반환
+ * MA 기간(일 단위)을 실제 데이터 포인트 수로 변환하는 데 사용
+ */
+function getPointsPerDay(rangeDays: number): number {
+  if (rangeDays <= 1) return 78;    // 5분 간격: 6.5시간 × 12
+  if (rangeDays <= 7) return 26;    // 15분 간격: 6.5시간 × 4
+  if (rangeDays <= 30) return 7;    // 1시간 간격: ~7
+  return 1;                          // 일봉 이상: 1포인트 = 1일
+}
+
+export default function PriceChart({ data, pins = [], range = 7 }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
   const { detailedChart, maLines, setCrosshair, setPinPoint } = useAppStore();
@@ -78,9 +90,14 @@ export default function PriceChart({ data, pins = [] }: PriceChartProps) {
     // 이동평균선 — detailedChart 모드에서만 표시
     if (detailedChart) {
       const priceData = data.map((d) => ({ time: d.time, value: d.value }));
+      const pointsPerDay = getPointsPerDay(range);
       const enabledMAs = maLines.filter((m) => m.enabled);
       for (const ma of enabledMAs) {
-        const maData = calcMA(priceData, ma.period);
+        // MA 기간(일)을 실제 데이터 포인트 수로 변환
+        const scaledPeriod = Math.round(ma.period * pointsPerDay);
+        // 데이터 포인트의 최소 30%는 MA 외 영역이어야 의미 있음
+        if (scaledPeriod >= priceData.length * 0.7) continue;
+        const maData = calcMA(priceData, scaledPeriod);
         if (maData.length > 0) {
           const maSeries = chart.addSeries(LineSeries, {
             color: ma.color,
@@ -130,7 +147,7 @@ export default function PriceChart({ data, pins = [] }: PriceChartProps) {
     chart.timeScale().fitContent();
 
     return () => { ro.disconnect(); chart.remove(); chartRef.current = null; };
-  }, [data, pins, detailedChart, maLines, setCrosshair, setPinPoint]);
+  }, [data, pins, range, detailedChart, maLines, setCrosshair, setPinPoint]);
 
   // MA legend (자세한 차트 모드일 때)
   const enabledMAs = detailedChart ? maLines.filter((m) => m.enabled) : [];

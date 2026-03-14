@@ -379,7 +379,7 @@ export default function HomePage() {
             시세 불러오는 중...
           </div>
         )}
-        {chartData.length > 0 && <PriceChart data={chartData} pins={chartPins} />}
+        {chartData.length > 0 && <PriceChart data={chartData} pins={chartPins} range={range} />}
       </div>
 
       {/* Pin bar */}
