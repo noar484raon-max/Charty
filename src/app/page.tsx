@@ -1,11 +1,10 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import InteractiveGlobe from "@/components/globe/InteractiveGlobe";
-import NewsPanel from "@/components/globe/NewsPanel";
+import WorldMap from "@/components/world-map/WorldMap";
+import NewsPanel from "@/components/world-map/NewsPanel";
 import type { CountrySummary } from "@/server/services/global-news";
 
-// 국가 빠른 선택 버튼 목록 (주요국)
 const QUICK_SELECT = [
   { code: "us", flag: "🇺🇸", name: "미국" },
   { code: "gb", flag: "🇬🇧", name: "영국" },
@@ -27,9 +26,7 @@ export default function GlobalNewsPage() {
     try {
       const res = await fetch("/api/global-news?mode=summary");
       const data = await res.json();
-      if (Array.isArray(data)) {
-        setCountries(data);
-      }
+      if (Array.isArray(data)) setCountries(data);
     } catch {
       console.error("Failed to load country summaries");
     }
@@ -40,7 +37,7 @@ export default function GlobalNewsPage() {
 
   return (
     <main className="h-[100dvh] flex flex-col md:flex-row overflow-hidden">
-      {/* 좌측: 지구본 영역 */}
+      {/* 좌측: 지도 영역 */}
       <div className="flex-1 flex flex-col min-h-0">
         {/* 헤더 */}
         <div className="px-4 md:px-6 pt-4 pb-2">
@@ -56,8 +53,7 @@ export default function GlobalNewsPage() {
           {/* 국가 빠른 선택 */}
           <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-hide">
             {QUICK_SELECT.map((c) => (
-              <button
-                key={c.code}
+              <button key={c.code}
                 onClick={() => setSelectedCountry(c.code)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all whitespace-nowrap shrink-0 ${
                   selectedCountry === c.code
@@ -72,7 +68,7 @@ export default function GlobalNewsPage() {
           </div>
         </div>
 
-        {/* 지구본 */}
+        {/* 세계지도 */}
         <div className="flex-1 min-h-0 relative">
           {loading ? (
             <div className="w-full h-full flex items-center justify-center">
@@ -82,7 +78,7 @@ export default function GlobalNewsPage() {
               </div>
             </div>
           ) : (
-            <InteractiveGlobe
+            <WorldMap
               countries={countries}
               selectedCountry={selectedCountry}
               onSelectCountry={setSelectedCountry}
@@ -94,8 +90,7 @@ export default function GlobalNewsPage() {
         <div className="hidden md:block px-6 pb-4">
           <div className="flex gap-2 overflow-x-auto scrollbar-hide">
             {countries.filter((c) => c.articleCount > 0).map((c) => (
-              <button
-                key={c.code}
+              <button key={c.code}
                 onClick={() => setSelectedCountry(c.code)}
                 className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-all shrink-0 ${
                   selectedCountry === c.code
@@ -126,17 +121,14 @@ export default function GlobalNewsPage() {
         ${selectedCountry ? "flex-1 md:flex-none" : "hidden md:block"}
         flex flex-col min-h-0
       `}>
-        {/* 모바일 뒤로가기 */}
         {selectedCountry && (
           <div className="md:hidden flex items-center gap-2 px-4 py-3 border-b border-white/[0.06]">
-            <button
-              onClick={() => setSelectedCountry(null)}
-              className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-zinc-200"
-            >
+            <button onClick={() => setSelectedCountry(null)}
+              className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-zinc-200">
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path d="M15 19l-7-7 7-7" />
               </svg>
-              지구본으로 돌아가기
+              지도로 돌아가기
             </button>
           </div>
         )}
