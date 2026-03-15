@@ -244,7 +244,7 @@ export default function ValuationCard({ symbol, type, assetName }: ValuationCard
           )}
 
           <div className="mt-3 text-[9px] text-zinc-600 text-center">
-            데이터 출처: Yahoo Finance · 투자 판단의 참고자료이며, 투자 권유가 아닙니다
+            데이터 출처: Finnhub · 투자 판단의 참고자료이며, 투자 권유가 아닙니다
           </div>
         </div>
       )}

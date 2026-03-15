@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { createChart, AreaSeries, HistogramSeries, LineSeries } from "lightweight-charts";
 import { useAppStore } from "@/stores/app-store";
+import type { ChartInterval } from "@/stores/app-store";
 
 type ChartDataPoint = { time: number; value: number; volume: number };
 type PinMarker = { time: number; sentiment: string; username: string };
@@ -10,6 +11,8 @@ type PinMarker = { time: number; sentiment: string; username: string };
 interface PriceChartProps {
   data: ChartDataPoint[];
   pins?: PinMarker[];
+  chartInterval?: ChartInterval;
+  /** @deprecated use chartInterval instead */
   range?: number;
   dailyData?: ChartDataPoint[];
 }
@@ -26,33 +29,31 @@ function calcMA(data: { time: number; value: number }[], period: number) {
 }
 
 /**
- * 시간대별 캔들 간격과 MA 라벨 매핑
- * 토스증권 방식: 각 시간대의 캔들 단위에 맞춰 MA 라벨 표시
- *
- * range(days)  → Yahoo interval  → 캔들 단위  → MA 라벨
- * 1 (1D)       → 5m             → 5분봉      → MA5, MA20, MA60, MA120 (캔들 기준)
- * 7 (1W)       → 15m            → 15분봉     → MA5, MA20, MA60, MA120
- * 30 (1M)      → 1h             → 시간봉     → MA5, MA20, MA60, MA120
- * 90 (3M)      → 1d             → 일봉       → MA5일, MA20일, MA60일, MA120일
- * 365 (1Y)     → 1d             → 일봉       → MA5일, MA20일, MA60일, MA120일
- * 1825 (5Y)    → 1wk            → 주봉       → MA5주, MA20주, MA60주, MA120주
- * 3650+ (ALL)  → 1mo            → 월봉       → MA5월, MA20월, MA60월, MA120월
+ * 토스증권 방식: 캔들 타입에 따른 MA 라벨
+ * 일봉 → MA5일, MA20일, MA60일, MA120일
+ * 주봉 → MA5주, MA20주, MA60주, MA120주
+ * 월봉 → MA5월, MA20월, MA60월, MA120월
+ * 연봉 → MA5년, MA20년, MA60년, MA120년
  */
-function getMALabel(period: number, rangeDays: number): string {
-  if (rangeDays >= 3650) return `MA${period}월`;
-  if (rangeDays >= 1825) return `MA${period}주`;
-  if (rangeDays >= 90) return `MA${period}일`;
-  if (rangeDays >= 30) return `MA${period}h`;
-  if (rangeDays >= 7) return `MA${period}`;
-  return `MA${period}`;
+function getMALabel(period: number, interval: ChartInterval): string {
+  switch (interval) {
+    case "daily": return `MA${period}일`;
+    case "weekly": return `MA${period}주`;
+    case "monthly": return `MA${period}월`;
+    case "yearly": return `MA${period}년`;
+  }
 }
 
-export default function PriceChart({ data, pins = [], range = 7 }: PriceChartProps) {
+export default function PriceChart({
+  data,
+  pins = [],
+  chartInterval = "daily",
+}: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
   const { detailedChart, maLines, setCrosshair, setPinPoint } = useAppStore();
 
-  // 자세한 차트 모드에서는 항상 MA 표시 가능
+  // 자세한 차트 모드에서는 MA 표시
   const showMA = detailedChart;
 
   useEffect(() => {
@@ -101,7 +102,7 @@ export default function PriceChart({ data, pins = [], range = 7 }: PriceChartPro
     });
     areaSeries.setData(data.map((d) => ({ time: d.time as any, value: d.value })));
 
-    // 이동평균선 — 모든 시간대에서 표시 (데이터 포인트 충분할 때)
+    // 이동평균선 — 모든 캔들 타입에서 표시
     if (showMA) {
       const priceData = data.map((d) => ({ time: d.time, value: d.value }));
       const enabledMAs = maLines.filter((m) => m.enabled);
@@ -158,7 +159,7 @@ export default function PriceChart({ data, pins = [], range = 7 }: PriceChartPro
     chart.timeScale().fitContent();
 
     return () => { ro.disconnect(); chart.remove(); chartRef.current = null; };
-  }, [data, pins, range, showMA, maLines, setCrosshair, setPinPoint]);
+  }, [data, pins, chartInterval, showMA, maLines, setCrosshair, setPinPoint]);
 
   // 표시 가능한 MA 목록 (데이터 포인트가 충분한 것만)
   const visibleMAs = showMA
@@ -185,7 +186,7 @@ export default function PriceChart({ data, pins = [], range = 7 }: PriceChartPro
               className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold bg-black/50 backdrop-blur-sm border border-white/[0.08]"
             >
               <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ma.color }} />
-              {getMALabel(ma.period, range)}
+              {getMALabel(ma.period, chartInterval)}
             </span>
           ))}
           {hiddenMAs.length > 0 && (

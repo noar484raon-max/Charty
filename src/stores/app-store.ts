@@ -13,6 +13,43 @@ export type MALine = {
   enabled: boolean;
 };
 
+// 토스증권 방식: 캔들 타입 (일봉/주봉/월봉/연봉)
+export type ChartInterval = "daily" | "weekly" | "monthly" | "yearly";
+
+// 각 캔들 타입별 하위 기간 옵션
+export const SUB_RANGES: Record<ChartInterval, { label: string; range: string }[]> = {
+  daily: [
+    { label: "1개월", range: "1mo" },
+    { label: "3개월", range: "3mo" },
+    { label: "6개월", range: "6mo" },
+    { label: "YTD", range: "ytd" },
+    { label: "1년", range: "1y" },
+  ],
+  weekly: [
+    { label: "6개월", range: "6mo" },
+    { label: "1년", range: "1y" },
+    { label: "2년", range: "2y" },
+    { label: "5년", range: "5y" },
+  ],
+  monthly: [
+    { label: "2년", range: "2y" },
+    { label: "5년", range: "5y" },
+    { label: "10년", range: "10y" },
+    { label: "전체", range: "max" },
+  ],
+  yearly: [
+    { label: "전체", range: "max" },
+  ],
+};
+
+// 각 캔들 타입의 기본 하위 기간
+const DEFAULT_SUB_RANGES: Record<ChartInterval, string> = {
+  daily: "1y",
+  weekly: "5y",
+  monthly: "max",
+  yearly: "max",
+};
+
 interface AppState {
   // Asset
   assetType: AssetType;
@@ -20,7 +57,13 @@ interface AppState {
   setAssetType: (type: AssetType) => void;
   setCurrentAsset: (asset: AssetInfo) => void;
 
-  // Range
+  // Chart interval (토스 방식: 캔들 타입)
+  chartInterval: ChartInterval;
+  setChartInterval: (interval: ChartInterval) => void;
+  subRange: string;
+  setSubRange: (range: string) => void;
+
+  // Legacy range (하위 호환용)
   range: number;
   setRange: (days: number) => void;
 
@@ -65,7 +108,18 @@ export const useAppStore = create<AppState>((set) => ({
   },
   setCurrentAsset: (asset) => set({ currentAsset: asset, assetType: asset.type, crosshair: null, pinPoint: null }),
 
-  range: 7,
+  // 토스 방식: 캔들 타입
+  chartInterval: "daily",
+  setChartInterval: (interval) => set({
+    chartInterval: interval,
+    subRange: DEFAULT_SUB_RANGES[interval],
+    crosshair: null,
+  }),
+  subRange: "1y",
+  setSubRange: (range) => set({ subRange: range, crosshair: null }),
+
+  // 레거시
+  range: 365,
   setRange: (days) => set({ range: days }),
 
   crosshair: null,
@@ -73,7 +127,7 @@ export const useAppStore = create<AppState>((set) => ({
   pinPoint: null,
   setPinPoint: (point) => set({ pinPoint: point }),
 
-  detailedChart: false,
+  detailedChart: true,  // 기본값을 true로 변경 (항상 이동평균선 표시)
   setDetailedChart: (v) => set({ detailedChart: v }),
 
   maLines: DEFAULT_MA_LINES,

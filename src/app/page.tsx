@@ -3,7 +3,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { ASSETS, ASSET_TYPES } from "@/lib/assets";
-import { useAppStore } from "@/stores/app-store";
+import { useAppStore, SUB_RANGES } from "@/stores/app-store";
+import type { ChartInterval } from "@/stores/app-store";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { formatPrice, formatDate } from "@/lib/utils";
 import { fetchMemos, createMemo, toggleLike, toggleBookmark, createComment, getUserLikes, getUserBookmarks, fetchComments } from "@/lib/db";
@@ -14,14 +15,12 @@ import MemoCard from "@/components/memo/MemoCard";
 import MemoCreateModal from "@/components/memo/MemoCreateModal";
 import ValuationCard from "@/components/analysis/ValuationCard";
 
-const RANGES = [
-  { label: "1D", days: 1 },
-  { label: "1W", days: 7 },
-  { label: "1M", days: 30 },
-  { label: "3M", days: 90 },
-  { label: "1Y", days: 365 },
-  { label: "5Y", days: 1825 },
-  { label: "ALL", days: 3650 },
+// 토스증권 방식: 캔들 타입 탭
+const INTERVALS: { label: string; key: ChartInterval }[] = [
+  { label: "일", key: "daily" },
+  { label: "주", key: "weekly" },
+  { label: "월", key: "monthly" },
+  { label: "년", key: "yearly" },
 ];
 
 type MemoItem = {
@@ -43,9 +42,11 @@ export default function HomePage() {
   const router = useRouter();
   const { user } = useAuth();
   const { showToast } = useToast();
-  const { assetType, currentAsset, range, crosshair, pinPoint, detailedChart, setAssetType, setCurrentAsset, setRange, setDetailedChart, openMemoModal } = useAppStore();
+  const {
+    assetType, currentAsset, chartInterval, subRange, crosshair, pinPoint, detailedChart,
+    setAssetType, setCurrentAsset, setChartInterval, setSubRange, setDetailedChart, openMemoModal,
+  } = useAppStore();
   const [chartData, setChartData] = useState<any[]>([]);
-  const [dailyData, setDailyData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [memos, setMemos] = useState<MemoItem[]>([]);
   const [memosLoading, setMemosLoading] = useState(false);
@@ -77,29 +78,24 @@ export default function HomePage() {
     ).slice(0, 8);
   }, [searchQuery]);
 
-  // Fetch chart data + daily data for MA calculation
+  // Fetch chart data — 인터벌 기반 (토스 방식)
   const loadChart = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/market?type=${currentAsset.type}&symbol=${currentAsset.symbol}&days=${range}`);
+      const params = new URLSearchParams({
+        type: currentAsset.type,
+        symbol: currentAsset.symbol,
+        interval: chartInterval,
+        subRange: subRange,
+      });
+      const res = await fetch(`/api/market?${params}`);
       const data = await res.json();
       setChartData(Array.isArray(data) ? data : []);
     } catch { setChartData([]); }
     setLoading(false);
-  }, [currentAsset, range]);
-
-  // 일봉 데이터 (MA 계산용) — 자세한 차트 모드일 때만
-  const loadDailyData = useCallback(async () => {
-    if (!detailedChart) return;
-    try {
-      const res = await fetch(`/api/market?type=${currentAsset.type}&symbol=${currentAsset.symbol}&days=365`);
-      const data = await res.json();
-      setDailyData(Array.isArray(data) ? data : []);
-    } catch { setDailyData([]); }
-  }, [currentAsset, detailedChart]);
+  }, [currentAsset, chartInterval, subRange]);
 
   useEffect(() => { loadChart(); }, [loadChart]);
-  useEffect(() => { loadDailyData(); }, [loadDailyData]);
 
   // Fetch memos from DB
   const loadMemos = useCallback(async () => {
@@ -253,6 +249,9 @@ export default function HomePage() {
     setSearchOpen(false);
   };
 
+  // 현재 인터벌에 해당하는 하위 기간 옵션
+  const currentSubRanges = SUB_RANGES[chartInterval];
+
   return (
     <main className="max-w-[960px] mx-auto px-4 md:px-8 pt-6">
       {/* Header with search */}
@@ -339,15 +338,15 @@ export default function HomePage() {
         ))}
       </div>
 
-      {/* Range + detailed chart toggle */}
-      <div className="flex items-center gap-2 mb-4 flex-wrap">
+      {/* 캔들 타입 탭 (토스 방식: 일/주/월/년) + 자세한 차트 토글 */}
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
         <div className="flex gap-0.5 bg-surface border border-white/[0.06] rounded-xl p-1 w-fit">
-          {RANGES.map((r) => (
-            <button key={r.days} onClick={() => setRange(r.days)}
-              className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${
-                range === r.days ? "bg-accent text-black font-semibold" : "text-zinc-500 hover:text-zinc-300 hover:bg-surface-2"
+          {INTERVALS.map((iv) => (
+            <button key={iv.key} onClick={() => setChartInterval(iv.key)}
+              className={`px-4 py-1.5 rounded-lg text-[13px] font-medium transition-all ${
+                chartInterval === iv.key ? "bg-accent text-black font-semibold" : "text-zinc-500 hover:text-zinc-300 hover:bg-surface-2"
               }`}>
-              {r.label}
+              {iv.label}
             </button>
           ))}
         </div>
@@ -361,9 +360,25 @@ export default function HomePage() {
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path d="M3 3v18h18" /><path d="M7 16l4-8 4 4 5-9" />
           </svg>
-          자세한 차트
+          이동평균선
         </button>
       </div>
+
+      {/* 하위 기간 선택 (1개월, 3개월, 6개월, ...) */}
+      {currentSubRanges.length > 1 && (
+        <div className="flex gap-1 mb-4">
+          {currentSubRanges.map((sr) => (
+            <button key={sr.range} onClick={() => setSubRange(sr.range)}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all ${
+                subRange === sr.range
+                  ? "bg-zinc-700 text-white font-semibold"
+                  : "text-zinc-500 hover:text-zinc-300 hover:bg-surface-2"
+              }`}>
+              {sr.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Price */}
       <div className="mb-3">
@@ -392,7 +407,9 @@ export default function HomePage() {
             시세 불러오는 중...
           </div>
         )}
-        {chartData.length > 0 && <PriceChart data={chartData} pins={chartPins} range={range} dailyData={dailyData} />}
+        {chartData.length > 0 && (
+          <PriceChart data={chartData} pins={chartPins} chartInterval={chartInterval} />
+        )}
       </div>
 
       {/* Valuation Analysis Card */}

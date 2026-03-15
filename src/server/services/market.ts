@@ -1,5 +1,9 @@
 import { generateMockData } from "@/lib/utils";
 
+// ─── 타입 ───
+
+export type ChartInterval = "daily" | "weekly" | "monthly" | "yearly";
+
 // ─── Yahoo Finance 심볼 변환 ───
 
 function toYahooSymbol(symbol: string, type: "us_stock" | "crypto"): string {
@@ -21,7 +25,27 @@ function toYahooSymbol(symbol: string, type: "us_stock" | "crypto"): string {
   return symbol; // US stock은 그대로
 }
 
-// ─── 기간에 따른 Yahoo Finance 파라미터 ───
+// ─── 인터벌별 Yahoo Finance 파라미터 ───
+// 토스증권 방식: 캔들 타입에 따라 적절한 기간의 데이터를 가져옴
+
+function getYahooParamsForInterval(
+  interval: ChartInterval,
+  subRange?: string
+): { range: string; interval: string } {
+  switch (interval) {
+    case "daily":
+      return { range: subRange || "1y", interval: "1d" };
+    case "weekly":
+      return { range: subRange || "5y", interval: "1wk" };
+    case "monthly":
+      return { range: subRange || "max", interval: "1mo" };
+    case "yearly":
+      // Yahoo에는 연봉 인터벌이 없으므로 월봉으로 가져온 후 집계
+      return { range: "max", interval: "1mo" };
+  }
+}
+
+// ─── 레거시: 기간(days) 기반 Yahoo Finance 파라미터 ───
 
 function getYahooParams(days: number): { range: string; interval: string } {
   if (days <= 1) return { range: "1d", interval: "5m" };
@@ -31,6 +55,44 @@ function getYahooParams(days: number): { range: string; interval: string } {
   if (days <= 365) return { range: "1y", interval: "1d" };
   if (days <= 1825) return { range: "5y", interval: "1wk" };
   return { range: "max", interval: "1mo" };
+}
+
+// ─── 연봉 데이터 집계 (월봉 → 연봉) ───
+
+function aggregateToYearly(
+  data: { time: number; value: number; volume: number }[]
+): { time: number; value: number; volume: number }[] {
+  const yearMap = new Map<
+    number,
+    { time: number; value: number; volume: number; firstTime: number }
+  >();
+
+  for (const d of data) {
+    const date = new Date(d.time * 1000);
+    const year = date.getFullYear();
+    const existing = yearMap.get(year);
+
+    if (!existing) {
+      yearMap.set(year, {
+        time: d.time, // 해당 연도의 마지막 데이터 시점 사용
+        value: d.value,
+        volume: d.volume,
+        firstTime: d.time,
+      });
+    } else {
+      // 연도 내 마지막 데이터 포인트의 가격을 사용, 거래량은 합산
+      yearMap.set(year, {
+        time: d.time,
+        value: d.value,
+        volume: existing.volume + d.volume,
+        firstTime: existing.firstTime,
+      });
+    }
+  }
+
+  return Array.from(yearMap.values())
+    .map((v) => ({ time: v.time, value: v.value, volume: v.volume }))
+    .sort((a, b) => a.time - b.time);
 }
 
 // ─── 메모리 캐시 ───
@@ -66,7 +128,77 @@ const FALLBACK_BASES: Record<string, number> = {
   dogecoin: 0.08, "avalanche-2": 35, chainlink: 15, polkadot: 7, polygon: 0.8,
 };
 
-// ─── Yahoo Finance fetcher ───
+// ─── Yahoo Finance 공통 파싱 ───
+
+function parseYahooResponse(json: any): { time: number; value: number; volume: number }[] {
+  const result = json?.chart?.result?.[0];
+  if (!result) return [];
+
+  const timestamps = result.timestamp || [];
+  const quotes = result.indicators?.quote?.[0] || {};
+  const closes = quotes.close || [];
+  const volumes = quotes.volume || [];
+
+  return timestamps
+    .map((t: number, i: number) => ({
+      time: t,
+      value: closes[i] != null ? parseFloat(Number(closes[i]).toFixed(2)) : null,
+      volume: volumes[i] || 0,
+    }))
+    .filter((p: any) => p.value !== null);
+}
+
+// ─── 인터벌 기반 Yahoo Finance fetcher (새로운 방식) ───
+
+async function fetchYahooByInterval(
+  symbol: string,
+  type: "us_stock" | "crypto",
+  interval: ChartInterval,
+  subRange?: string
+): Promise<any[]> {
+  const yahooSymbol = toYahooSymbol(symbol, type);
+  const cacheKey = `yahoo_${yahooSymbol}_${interval}_${subRange || "default"}`;
+  const cacheTTL = 5 * 60_000;
+  const cached = getCached(cacheKey, cacheTTL);
+  if (cached) return cached;
+
+  try {
+    const params = getYahooParamsForInterval(interval, subRange);
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?range=${params.range}&interval=${params.interval}&includePrePost=false`;
+
+    const r = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      },
+      next: { revalidate: 300 },
+    });
+
+    if (!r.ok) throw new Error(`Yahoo Finance HTTP ${r.status}`);
+    const json = await r.json();
+    let data = parseYahooResponse(json);
+
+    if (data.length === 0) throw new Error("Empty data");
+
+    // 연봉은 월봉 데이터를 집계
+    if (interval === "yearly") {
+      data = aggregateToYearly(data);
+    }
+
+    setCache(cacheKey, data);
+    console.log(
+      `[Market] ${yahooSymbol} ${interval}(${subRange || "default"}): ${data.length} points`
+    );
+    return data;
+  } catch (e) {
+    console.warn(`[Market] Yahoo interval fetch failed for ${symbol} (${interval}):`, e);
+    const fallbackDays =
+      interval === "daily" ? 365 : interval === "weekly" ? 1825 : 3650;
+    return generateMockData(fallbackDays, FALLBACK_BASES[symbol] || 100, symbol);
+  }
+}
+
+// ─── 레거시: days 기반 Yahoo Finance fetcher ───
 
 async function fetchYahooFinance(
   symbol: string,
@@ -85,29 +217,15 @@ async function fetchYahooFinance(
 
     const r = await fetch(url, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
       },
       next: { revalidate: Math.floor(cacheTTL / 1000) },
     });
 
     if (!r.ok) throw new Error(`Yahoo Finance HTTP ${r.status}`);
-    const d = await r.json();
-
-    const result = d?.chart?.result?.[0];
-    if (!result) throw new Error("No chart data");
-
-    const timestamps = result.timestamp || [];
-    const quotes = result.indicators?.quote?.[0] || {};
-    const closes = quotes.close || [];
-    const volumes = quotes.volume || [];
-
-    const data = timestamps
-      .map((t: number, i: number) => ({
-        time: t,
-        value: closes[i] != null ? parseFloat(Number(closes[i]).toFixed(2)) : null,
-        volume: volumes[i] || 0,
-      }))
-      .filter((p: any) => p.value !== null);
+    const json = await r.json();
+    const data = parseYahooResponse(json);
 
     if (data.length > 0) {
       setCache(cacheKey, data);
@@ -120,7 +238,47 @@ async function fetchYahooFinance(
   }
 }
 
-// ─── 공개 API ───
+// ─── 공개 API: 인터벌 기반 (새로운 방식) ───
+
+export async function fetchChartByInterval(
+  symbol: string,
+  type: "us_stock" | "crypto",
+  interval: ChartInterval,
+  subRange?: string
+): Promise<any[]> {
+  // 암호화폐 일봉은 CoinGecko 우선 시도
+  if (type === "crypto" && interval === "daily" && !subRange) {
+    try {
+      const cacheKey = `crypto_${symbol}_daily`;
+      const cached = getCached(cacheKey, 60_000);
+      if (cached) return cached;
+
+      const r = await fetch(
+        `https://api.coingecko.com/api/v3/coins/${symbol}/market_chart?vs_currency=usd&days=365`,
+        { next: { revalidate: 60 } }
+      );
+      if (!r.ok) throw new Error(`CoinGecko API error: ${r.status}`);
+      const d = await r.json();
+      const result = (d.prices || []).map(
+        ([t, v]: [number, number], i: number) => ({
+          time: Math.floor(t / 1000),
+          value: parseFloat(v.toFixed(2)),
+          volume: d.total_volumes?.[i]?.[1] ?? 0,
+        })
+      );
+      if (result.length > 0) {
+        setCache(cacheKey, result);
+        return result;
+      }
+    } catch {
+      // CoinGecko 실패 → Yahoo Finance로 폴백
+    }
+  }
+
+  return fetchYahooByInterval(symbol, type, interval, subRange);
+}
+
+// ─── 공개 API: 레거시 (days 기반) ───
 
 export async function fetchCryptoData(symbol: string, days: number) {
   const cacheKey = `crypto_${symbol}_${days}`;
@@ -134,11 +292,13 @@ export async function fetchCryptoData(symbol: string, days: number) {
     );
     if (!r.ok) throw new Error(`CoinGecko API error: ${r.status}`);
     const d = await r.json();
-    const result = (d.prices || []).map(([t, v]: [number, number], i: number) => ({
-      time: Math.floor(t / 1000),
-      value: parseFloat(v.toFixed(2)),
-      volume: d.total_volumes?.[i]?.[1] ?? 0,
-    }));
+    const result = (d.prices || []).map(
+      ([t, v]: [number, number], i: number) => ({
+        time: Math.floor(t / 1000),
+        value: parseFloat(v.toFixed(2)),
+        volume: d.total_volumes?.[i]?.[1] ?? 0,
+      })
+    );
     if (result.length > 0) {
       setCache(cacheKey, result);
       return result;

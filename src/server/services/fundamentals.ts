@@ -125,22 +125,50 @@ function overallAssessment(pe: ValuationLevel, pb: ValuationLevel, ps: Valuation
   return "고평가";
 }
 
-// ─── Finnhub API 호출 ───
+// ─── Finnhub API 호출 (재시도 로직 포함) ───
 
-async function finnhubFetch(endpoint: string): Promise<any> {
-  if (!FINNHUB_KEY) return null;
-  try {
-    const url = `https://finnhub.io/api/v1${endpoint}${endpoint.includes("?") ? "&" : "?"}token=${FINNHUB_KEY}`;
-    const r = await fetch(url);
-    if (!r.ok) {
-      console.warn(`Finnhub ${endpoint}: HTTP ${r.status}`);
-      return null;
-    }
-    return await r.json();
-  } catch (e) {
-    console.warn(`Finnhub error:`, e);
+async function finnhubFetch(endpoint: string, retries = 2): Promise<any> {
+  if (!FINNHUB_KEY) {
+    console.warn(`[Finnhub] API key not set`);
     return null;
   }
+  const url = `https://finnhub.io/api/v1${endpoint}${endpoint.includes("?") ? "&" : "?"}token=${FINNHUB_KEY}`;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+
+      if (r.status === 429) {
+        // Rate limit — 잠시 후 재시도
+        console.warn(`[Finnhub] Rate limited on ${endpoint}, attempt ${attempt + 1}`);
+        if (attempt < retries) {
+          await new Promise(res => setTimeout(res, 1500 * (attempt + 1)));
+          continue;
+        }
+        return null;
+      }
+
+      if (!r.ok) {
+        console.warn(`[Finnhub] ${endpoint}: HTTP ${r.status}`);
+        if (attempt < retries) {
+          await new Promise(res => setTimeout(res, 500));
+          continue;
+        }
+        return null;
+      }
+
+      const data = await r.json();
+      return data;
+    } catch (e) {
+      console.warn(`[Finnhub] Error on ${endpoint}, attempt ${attempt + 1}:`, e);
+      if (attempt < retries) {
+        await new Promise(res => setTimeout(res, 500));
+        continue;
+      }
+      return null;
+    }
+  }
+  return null;
 }
 
 // 회사 프로필: 섹터, 산업, 시가총액, 로고 등
@@ -309,14 +337,16 @@ export async function fetchFundamentals(
       beta: round2(beta),
     };
 
-    const hasData = profile || (metrics?.metric && Object.keys(metrics.metric).length > 0);
-    if (hasData) {
+    const hasMetrics = metrics?.metric && Object.keys(metrics.metric).length > 0;
+    const hasProfile = profile && Object.keys(profile).length > 0;
+    const hasRealData = hasProfile || hasMetrics;
+
+    if (hasRealData) {
       setCache(cacheKey, data);
-      console.log(`[Fundamentals] ${symbol}: Finnhub success (profile=${!!profile}, metrics=${!!metrics?.metric})`);
+      console.log(`[Fundamentals] ${symbol}: Finnhub success (profile=${!!hasProfile}, metrics=${!!hasMetrics}, PE=${trailingPE}, PB=${pb})`);
     } else {
-      // 짧은 캐시
-      fCache.set(cacheKey, { data, ts: Date.now() - CACHE_TTL + 2 * 60_000 });
-      console.log(`[Fundamentals] ${symbol}: Finnhub no data, chartMeta=${!!chartMeta}`);
+      // 실패한 결과는 캐시하지 않음 — 다음 요청에서 다시 시도
+      console.log(`[Fundamentals] ${symbol}: No Finnhub data (profile=${JSON.stringify(profile)?.slice(0,100)}, metrics keys=${Object.keys(m).length}), chartMeta=${!!chartMeta}. NOT caching.`);
     }
 
     return data;
