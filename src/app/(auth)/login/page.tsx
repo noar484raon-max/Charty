@@ -6,7 +6,7 @@ import { useAuth } from "@/components/providers/AuthProvider";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { signInWithGoogle, signInWithKakao, signInWithEmail, signUpWithEmail, user } = useAuth();
+  const { signInWithGoogle, signInWithEmail, signUpWithEmail, user } = useAuth();
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -63,16 +63,6 @@ export default function LoginPage() {
             Google로 계속하기
           </button>
 
-          <button
-            onClick={signInWithKakao}
-            className="w-full flex items-center justify-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold transition-colors"
-            style={{ backgroundColor: "#FEE500", color: "#191919" }}
-          >
-            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="#191919">
-              <path d="M12 3C6.48 3 2 6.36 2 10.44c0 2.62 1.75 4.93 4.37 6.24l-1.12 4.16c-.1.36.32.65.64.44l4.96-3.26c.37.04.75.06 1.15.06 5.52 0 10-3.36 10-7.64C22 6.36 17.52 3 12 3z" />
-            </svg>
-            카카오로 계속하기
-          </button>
         </div>
 
         {/* Divider */}
