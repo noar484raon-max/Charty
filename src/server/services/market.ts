@@ -36,7 +36,7 @@ function getYahooParamsForInterval(
     case "daily":
       return { range: subRange || "1y", interval: "1d" };
     case "weekly":
-      return { range: subRange || "5y", interval: "1wk" };
+      return { range: subRange || "max", interval: "1wk" };
     case "monthly":
       return { range: subRange || "max", interval: "1mo" };
     case "yearly":

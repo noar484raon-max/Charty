@@ -22,14 +22,15 @@ export const SUB_RANGES: Record<ChartInterval, { label: string; range: string }[
     { label: "1개월", range: "1mo" },
     { label: "3개월", range: "3mo" },
     { label: "6개월", range: "6mo" },
-    { label: "YTD", range: "ytd" },
     { label: "1년", range: "1y" },
+    { label: "전체", range: "max" },
   ],
   weekly: [
-    { label: "6개월", range: "6mo" },
     { label: "1년", range: "1y" },
     { label: "2년", range: "2y" },
     { label: "5년", range: "5y" },
+    { label: "10년", range: "10y" },
+    { label: "전체", range: "max" },
   ],
   monthly: [
     { label: "2년", range: "2y" },
@@ -42,10 +43,10 @@ export const SUB_RANGES: Record<ChartInterval, { label: string; range: string }[
   ],
 };
 
-// 각 캔들 타입의 기본 하위 기간
+// 각 캔들 타입의 기본 하위 기간 — 토스처럼 전체 기간 기본값
 const DEFAULT_SUB_RANGES: Record<ChartInterval, string> = {
   daily: "1y",
-  weekly: "5y",
+  weekly: "max",
   monthly: "max",
   yearly: "max",
 };
