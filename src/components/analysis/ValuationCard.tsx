@@ -88,6 +88,8 @@ export default function ValuationCard({ symbol, type, assetName }: ValuationCard
   const [data, setData] = useState<FundamentalData | null>(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
+  const MAX_RETRIES = 2;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -95,11 +97,32 @@ export default function ValuationCard({ symbol, type, assetName }: ValuationCard
       const res = await fetch(`/api/fundamentals?symbol=${symbol}&type=${type}`);
       const json = await res.json();
       setData(json);
+
+      // 주식인데 핵심 지표가 비어있으면 자동 재시도 (Finnhub 간헐적 실패 대응)
+      const isMissingData = type !== "crypto" &&
+        json.trailingPE == null &&
+        json.priceToBook == null &&
+        json.marketCap == null;
+
+      if (isMissingData && retryCount < MAX_RETRIES) {
+        console.log(`[ValuationCard] ${symbol}: 데이터 비어있음, ${retryCount + 1}/${MAX_RETRIES} 재시도 예정...`);
+        setTimeout(() => {
+          setRetryCount((prev) => prev + 1);
+        }, 3000 * (retryCount + 1)); // 3초, 6초 후 재시도
+      }
     } catch {
       setData(null);
+      if (retryCount < MAX_RETRIES) {
+        setTimeout(() => {
+          setRetryCount((prev) => prev + 1);
+        }, 3000 * (retryCount + 1));
+      }
     }
     setLoading(false);
-  }, [symbol, type]);
+  }, [symbol, type, retryCount]);
+
+  // symbol 변경 시 재시도 카운트 리셋
+  useEffect(() => { setRetryCount(0); }, [symbol]);
 
   useEffect(() => { load(); }, [load]);
 

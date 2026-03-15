@@ -252,12 +252,18 @@ export async function fetchFundamentals(
     }
 
     // 미국 주식: Finnhub API 사용
+    if (!FINNHUB_KEY) {
+      console.error(`[Fundamentals] FINNHUB_API_KEY 환경변수가 설정되지 않았습니다!`);
+    }
     const finnhubSymbol = symbol; // US stocks는 그대로
 
-    // 병렬로 Finnhub 프로필 + 지표 + 시세 + Yahoo fallback 가져오기
-    const [profile, metrics, quote, chartMeta] = await Promise.all([
+    // Finnhub 프로필 + 지표를 먼저, 시세 + Yahoo는 병렬로
+    // (Finnhub 무료 60req/min — 요청 간 약간의 간격)
+    const [profile, metrics] = await Promise.all([
       fetchFinnhubProfile(finnhubSymbol),
       fetchFinnhubMetrics(finnhubSymbol),
+    ]);
+    const [quote, chartMeta] = await Promise.all([
       fetchFinnhubQuote(finnhubSymbol),
       fetchChartMeta(yahooSymbol),
     ]);
