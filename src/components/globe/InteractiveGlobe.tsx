@@ -2,6 +2,7 @@
 
 import { useRef, useEffect, useCallback } from "react";
 import * as THREE from "three";
+import { EARTH_TEXTURE_DATA } from "./earth-texture-data";
 
 interface CountryPoint {
   code: string;
@@ -36,10 +37,6 @@ function sentimentToHex(score: number): number {
   return 0xef4444;
 }
 
-// 실제 지구 텍스처 URL (public domain / free CDN)
-const EARTH_TEXTURE_URL = "https://unpkg.com/three-globe@2.31.1/example/img/earth-night.jpg";
-const EARTH_TOPO_URL = "https://unpkg.com/three-globe@2.31.1/example/img/earth-topology.png";
-
 export default function InteractiveGlobe({ countries, selectedCountry, onSelectCountry }: InteractiveGlobeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const markersGroupRef = useRef<THREE.Group | null>(null);
@@ -58,7 +55,6 @@ export default function InteractiveGlobe({ countries, selectedCountry, onSelectC
   const raycaster = useRef(new THREE.Raycaster());
   const mouse = useRef(new THREE.Vector2());
 
-  // ─── 씬 초기화 ───
   useEffect(() => {
     if (!containerRef.current) return;
     const el = containerRef.current;
@@ -76,47 +72,37 @@ export default function InteractiveGlobe({ countries, selectedCountry, onSelectC
     renderer.setClearColor(0x000000, 0);
     el.appendChild(renderer.domElement);
 
-    // 조명
-    scene.add(new THREE.AmbientLight(0xffffff, 1.0));
-    const dl = new THREE.DirectionalLight(0xffffff, 0.5);
+    scene.add(new THREE.AmbientLight(0xffffff, 1.2));
+    const dl = new THREE.DirectionalLight(0xffffff, 0.4);
     dl.position.set(5, 3, 5);
     scene.add(dl);
 
-    // Globe group
     const globe = new THREE.Group();
     scene.add(globe);
     globeRef.current = globe;
 
-    // ── 지구 구체 (텍스처 로드) ──
-    const loader = new THREE.TextureLoader();
-    loader.crossOrigin = "anonymous";
-
-    // 먼저 기본 구체 생성 (텍스처 로드 전)
+    // ── 지구 구체 (인라인 텍스처) ──
     const earthGeo = new THREE.SphereGeometry(1, 64, 64);
     const earthMat = new THREE.MeshPhongMaterial({
       color: 0x1a2030,
-      emissive: 0x050810,
-      specular: 0x333355,
+      specular: 0x222244,
       shininess: 15,
     });
     const earthMesh = new THREE.Mesh(earthGeo, earthMat);
     globe.add(earthMesh);
 
-    // 텍스처 로드 (비동기)
-    loader.load(
-      EARTH_TEXTURE_URL,
-      (texture) => {
-        earthMat.map = texture;
-        earthMat.color.set(0xffffff);
-        earthMat.emissive.set(0x112244);
-        earthMat.emissiveIntensity = 0.15;
-        earthMat.needsUpdate = true;
-      },
-      undefined,
-      (err) => {
-        console.warn("Earth texture load failed, using fallback color", err);
-      }
-    );
+    // 인라인 base64 텍스처 로드 (CORS 무관)
+    const img = new Image();
+    img.onload = () => {
+      const texture = new THREE.Texture(img);
+      texture.needsUpdate = true;
+      earthMat.map = texture;
+      earthMat.color.set(0xffffff);
+      earthMat.emissive.set(0x0a2030);
+      earthMat.emissiveIntensity = 0.3;
+      earthMat.needsUpdate = true;
+    };
+    img.src = EARTH_TEXTURE_DATA;
 
     // ── 대기 글로우 ──
     const atmosGeo = new THREE.SphereGeometry(1.05, 64, 64);
@@ -149,7 +135,6 @@ export default function InteractiveGlobe({ countries, selectedCountry, onSelectC
     globe.rotation.x = rotRef.current.x;
     globe.rotation.y = rotRef.current.y;
 
-    // 리사이즈
     const onResize = () => {
       const w2 = el.clientWidth, h2 = el.clientHeight;
       camera.aspect = w2 / h2;
@@ -158,18 +143,14 @@ export default function InteractiveGlobe({ countries, selectedCountry, onSelectC
     };
     window.addEventListener("resize", onResize);
 
-    // 애니메이션
     let rafId = 0;
     const animate = () => {
       rafId = requestAnimationFrame(animate);
       timeRef.current += 0.016;
-
       if (autoRotRef.current && !isDraggingRef.current) {
         rotRef.current.y += 0.0012;
         globe.rotation.y = rotRef.current.y;
       }
-
-      // 마커 펄스
       markerMeshesRef.current.forEach((m) => {
         if (m.userData.pulse) {
           const s = 1 + Math.sin(timeRef.current * 3 + m.userData.phase) * 0.3;
@@ -178,7 +159,6 @@ export default function InteractiveGlobe({ countries, selectedCountry, onSelectC
             0.5 - Math.sin(timeRef.current * 3 + m.userData.phase) * 0.2;
         }
       });
-
       renderer.render(scene, camera);
     };
     animate();
@@ -212,7 +192,6 @@ export default function InteractiveGlobe({ countries, selectedCountry, onSelectC
       const col = sentimentToHex(c.sentiment);
       const hasNews = c.articleCount > 0;
 
-      // 메인 마커
       const sz = sel ? 0.05 : hasNews ? 0.032 : 0.016;
       const geo = new THREE.SphereGeometry(sz, 16, 16);
       const mat = new THREE.MeshBasicMaterial({
@@ -226,7 +205,6 @@ export default function InteractiveGlobe({ countries, selectedCountry, onSelectC
       mg.add(mesh);
       markerMeshesRef.current.push(mesh);
 
-      // 펄스 링
       if (hasNews || sel) {
         const rg = new THREE.RingGeometry(sz * 1.8, sz * 2.4, 32);
         const rm = new THREE.MeshBasicMaterial({
@@ -243,7 +221,6 @@ export default function InteractiveGlobe({ countries, selectedCountry, onSelectC
         markerMeshesRef.current.push(ring);
       }
 
-      // 선택 빔
       if (sel) {
         const outerPos = latLngToVec3(c.lat, c.lng, 1.2);
         const mid = pos.clone().lerp(outerPos, 0.5);
@@ -257,15 +234,13 @@ export default function InteractiveGlobe({ countries, selectedCountry, onSelectC
         mg.add(beam);
 
         const opGeo = new THREE.SphereGeometry(0.018, 12, 12);
-        const opMat = new THREE.MeshBasicMaterial({ color: col });
-        const op = new THREE.Mesh(opGeo, opMat);
+        const op = new THREE.Mesh(opGeo, new THREE.MeshBasicMaterial({ color: col }));
         op.position.copy(outerPos);
         mg.add(op);
       }
     });
   }, [countries, selectedCountry]);
 
-  // ─── 이벤트 ───
   const onDown = useCallback((e: React.PointerEvent) => {
     isDraggingRef.current = true;
     hasDraggedRef.current = false;
@@ -278,11 +253,9 @@ export default function InteractiveGlobe({ countries, selectedCountry, onSelectC
     if (!isDraggingRef.current || !globeRef.current) return;
     const dx = e.clientX - prevMouseRef.current.x;
     const dy = e.clientY - prevMouseRef.current.y;
-
     if (Math.abs(e.clientX - dragStartRef.current.x) > 5 || Math.abs(e.clientY - dragStartRef.current.y) > 5) {
       hasDraggedRef.current = true;
     }
-
     rotRef.current.y += dx * 0.005;
     rotRef.current.x += dy * 0.005;
     rotRef.current.x = Math.max(-1.2, Math.min(1.2, rotRef.current.x));
@@ -297,14 +270,11 @@ export default function InteractiveGlobe({ countries, selectedCountry, onSelectC
   }, []);
 
   const onClick = useCallback((e: React.MouseEvent) => {
-    // 드래그 후 클릭 방지
     if (hasDraggedRef.current) return;
     if (!containerRef.current || !cameraRef.current || !markersGroupRef.current) return;
-
     const rect = containerRef.current.getBoundingClientRect();
     mouse.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     mouse.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-
     raycaster.current.setFromCamera(mouse.current, cameraRef.current);
     const hits = raycaster.current.intersectObjects(markersGroupRef.current.children);
     for (const h of hits) {
@@ -344,16 +314,13 @@ export default function InteractiveGlobe({ countries, selectedCountry, onSelectC
 
       <div className="absolute bottom-12 right-3 bg-surface/80 backdrop-blur-sm border border-white/[0.06] rounded-lg px-2.5 py-2 text-[10px]">
         <div className="flex items-center gap-1.5 mb-1">
-          <span className="w-2 h-2 rounded-full bg-emerald-500" />
-          <span className="text-zinc-400">긍정</span>
+          <span className="w-2 h-2 rounded-full bg-emerald-500" /><span className="text-zinc-400">긍정</span>
         </div>
         <div className="flex items-center gap-1.5 mb-1">
-          <span className="w-2 h-2 rounded-full bg-yellow-500" />
-          <span className="text-zinc-400">중립</span>
+          <span className="w-2 h-2 rounded-full bg-yellow-500" /><span className="text-zinc-400">중립</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-red-500" />
-          <span className="text-zinc-400">부정</span>
+          <span className="w-2 h-2 rounded-full bg-red-500" /><span className="text-zinc-400">부정</span>
         </div>
       </div>
 
