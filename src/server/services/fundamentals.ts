@@ -1,8 +1,8 @@
-// ─── Financial Modeling Prep (FMP) + Yahoo Finance Fallback ───
-// FMP API: 무료 250req/day, PER/PBR/PSR/시가총액 등 제공
+// ─── Finnhub + Yahoo Finance 재무 데이터 서비스 ───
+// Finnhub: 무료 60req/min, PER/PBR/PSR/시가총액 등 제공
 // Yahoo Finance v8 chart meta: 52주 범위 fallback
 
-const FMP_KEY = process.env.FMP_API_KEY || "";
+const FINNHUB_KEY = process.env.FINNHUB_API_KEY || "";
 
 type CacheEntry = { data: any; ts: number };
 const fCache = new Map<string, CacheEntry>();
@@ -24,15 +24,15 @@ function setCache(key: string, data: any) {
 
 // ─── 심볼 변환 ───
 
-function toFMPSymbol(symbol: string, type: "us_stock" | "crypto"): string {
+function toFinnhubSymbol(symbol: string, type: "us_stock" | "crypto"): string {
   if (type === "crypto") {
     const CRYPTO_MAP: Record<string, string> = {
-      bitcoin: "BTCUSD", ethereum: "ETHUSD", solana: "SOLUSD",
-      ripple: "XRPUSD", cardano: "ADAUSD", dogecoin: "DOGEUSD",
-      "avalanche-2": "AVAXUSD", chainlink: "LINKUSD",
-      polkadot: "DOTUSD", polygon: "MATICUSD",
+      bitcoin: "BINANCE:BTCUSDT", ethereum: "BINANCE:ETHUSDT", solana: "BINANCE:SOLUSDT",
+      ripple: "BINANCE:XRPUSDT", cardano: "BINANCE:ADAUSDT", dogecoin: "BINANCE:DOGEUSDT",
+      "avalanche-2": "BINANCE:AVAXUSDT", chainlink: "BINANCE:LINKUSDT",
+      polkadot: "BINANCE:DOTUSDT", polygon: "BINANCE:MATICUSDT",
     };
-    return CRYPTO_MAP[symbol] || `${symbol.toUpperCase()}USD`;
+    return CRYPTO_MAP[symbol] || "";
   }
   return symbol; // US stocks: AAPL, MSFT, etc.
 }
@@ -125,55 +125,37 @@ function overallAssessment(pe: ValuationLevel, pb: ValuationLevel, ps: Valuation
   return "고평가";
 }
 
-// ─── FMP API: 회사 프로필 ───
+// ─── Finnhub API 호출 ───
 
-async function fetchFMPProfile(fmpSymbol: string): Promise<any> {
-  if (!FMP_KEY) return null;
+async function finnhubFetch(endpoint: string): Promise<any> {
+  if (!FINNHUB_KEY) return null;
   try {
-    const url = `https://financialmodelingprep.com/api/v3/profile/${encodeURIComponent(fmpSymbol)}?apikey=${FMP_KEY}`;
+    const url = `https://finnhub.io/api/v1${endpoint}${endpoint.includes("?") ? "&" : "?"}token=${FINNHUB_KEY}`;
     const r = await fetch(url);
     if (!r.ok) {
-      console.warn(`FMP profile ${fmpSymbol}: HTTP ${r.status}`);
+      console.warn(`Finnhub ${endpoint}: HTTP ${r.status}`);
       return null;
     }
-    const data = await r.json();
-    return data?.[0] ?? null;
+    return await r.json();
   } catch (e) {
-    console.warn(`FMP profile error for ${fmpSymbol}:`, e);
+    console.warn(`Finnhub error:`, e);
     return null;
   }
 }
 
-// ─── FMP API: 밸류에이션 비율 (TTM) ───
-
-async function fetchFMPRatios(fmpSymbol: string): Promise<any> {
-  if (!FMP_KEY) return null;
-  try {
-    const url = `https://financialmodelingprep.com/api/v3/ratios-ttm/${encodeURIComponent(fmpSymbol)}?apikey=${FMP_KEY}`;
-    const r = await fetch(url);
-    if (!r.ok) return null;
-    const data = await r.json();
-    return data?.[0] ?? null;
-  } catch (e) {
-    console.warn(`FMP ratios error for ${fmpSymbol}:`, e);
-    return null;
-  }
+// 회사 프로필: 섹터, 산업, 시가총액, 로고 등
+async function fetchFinnhubProfile(symbol: string): Promise<any> {
+  return finnhubFetch(`/stock/profile2?symbol=${encodeURIComponent(symbol)}`);
 }
 
-// ─── FMP API: 핵심 지표 (TTM) ───
+// 기본 재무 지표: PE, PB, PS, 52주 범위, ROE, 배당 등
+async function fetchFinnhubMetrics(symbol: string): Promise<any> {
+  return finnhubFetch(`/stock/metric?symbol=${encodeURIComponent(symbol)}&metric=all`);
+}
 
-async function fetchFMPKeyMetrics(fmpSymbol: string): Promise<any> {
-  if (!FMP_KEY) return null;
-  try {
-    const url = `https://financialmodelingprep.com/api/v3/key-metrics-ttm/${encodeURIComponent(fmpSymbol)}?apikey=${FMP_KEY}`;
-    const r = await fetch(url);
-    if (!r.ok) return null;
-    const data = await r.json();
-    return data?.[0] ?? null;
-  } catch (e) {
-    console.warn(`FMP key-metrics error for ${fmpSymbol}:`, e);
-    return null;
-  }
+// 현재 시세
+async function fetchFinnhubQuote(symbol: string): Promise<any> {
+  return finnhubFetch(`/quote?symbol=${encodeURIComponent(symbol)}`);
 }
 
 // ─── Yahoo Finance v8 chart meta (fallback) ───
@@ -213,44 +195,86 @@ export async function fetchFundamentals(
     isCrypto, epsTrailing: null, bookValue: null, beta: null,
   };
 
-  try {
-    const fmpSymbol = toFMPSymbol(symbol, type);
-    const yahooSymbol = toYahooSymbol(symbol, type);
+  const yahooSymbol = toYahooSymbol(symbol, type);
 
-    // FMP 데이터와 Yahoo chart meta를 병렬로 가져오기
-    const [profile, ratios, chartMeta] = await Promise.all([
-      fetchFMPProfile(fmpSymbol),
-      isCrypto ? Promise.resolve(null) : fetchFMPRatios(fmpSymbol),
+  try {
+    if (isCrypto) {
+      // 암호화폐: Yahoo Finance chart meta만 사용
+      const chartMeta = await fetchChartMeta(yahooSymbol);
+      if (!chartMeta) return emptyResult;
+
+      const currentPrice = chartMeta.regularMarketPrice ?? null;
+      const high52 = chartMeta.fiftyTwoWeekHigh ?? null;
+      const low52 = chartMeta.fiftyTwoWeekLow ?? null;
+      let pos52: number | null = null;
+      if (currentPrice && high52 && low52 && high52 !== low52) {
+        pos52 = Math.max(0, Math.min(100, Math.round(((currentPrice - low52) / (high52 - low52)) * 100)));
+      }
+
+      const data: FundamentalData = {
+        ...emptyResult,
+        currentPrice,
+        fiftyTwoWeekHigh: high52,
+        fiftyTwoWeekLow: low52,
+        fiftyTwoWeekRange: high52 && low52 ? `$${low52.toLocaleString()} – $${high52.toLocaleString()}` : null,
+        fiftyTwoWeekPosition: pos52,
+      };
+      setCache(cacheKey, data);
+      return data;
+    }
+
+    // 미국 주식: Finnhub API 사용
+    const finnhubSymbol = symbol; // US stocks는 그대로
+
+    // 병렬로 Finnhub 프로필 + 지표 + 시세 + Yahoo fallback 가져오기
+    const [profile, metrics, quote, chartMeta] = await Promise.all([
+      fetchFinnhubProfile(finnhubSymbol),
+      fetchFinnhubMetrics(finnhubSymbol),
+      fetchFinnhubQuote(finnhubSymbol),
       fetchChartMeta(yahooSymbol),
     ]);
 
-    // FMP 프로필에서 기본 데이터 추출
-    const currentPrice = profile?.price ?? chartMeta?.regularMarketPrice ?? null;
-    const high52 = profile?.range ? parseFloat(profile.range.split("-")[1]) : chartMeta?.fiftyTwoWeekHigh ?? null;
-    const low52 = profile?.range ? parseFloat(profile.range.split("-")[0]) : chartMeta?.fiftyTwoWeekLow ?? null;
-    const marketCap = profile?.mktCap ?? null;
-    const sector = profile?.sector ?? null;
-    const industry = profile?.industry ?? null;
-    const beta = profile?.beta ?? null;
-    const divYield = profile?.lastDiv && currentPrice ? profile.lastDiv / currentPrice : null;
+    const m = metrics?.metric || {};
 
-    // FMP ratios에서 밸류에이션 지표 추출 (주식만)
-    const trailingPE = ratios?.peRatioTTM ?? null;
-    const pb = ratios?.priceToBookRatioTTM ?? null;
-    const ps = ratios?.priceToSalesRatioTTM ?? null;
-    const forwardPE = ratios?.priceEarningsToGrowthRatioTTM ?? null; // PEG → forward PE 근사
-    const evEbitda = ratios?.enterpriseValueOverEBITDATTM ?? null;
-    const profitMargin = ratios?.netProfitMarginTTM ?? null;
-    const roe = ratios?.returnOnEquityTTM ?? null;
-    const eps = profile?.eps ?? null; // 일부 프로필에 EPS 있음
+    // 현재가
+    const currentPrice = quote?.c ?? chartMeta?.regularMarketPrice ?? null;
 
-    // 52주 위치 계산
+    // 52주 범위
+    const high52 = m["52WeekHigh"] ?? chartMeta?.fiftyTwoWeekHigh ?? null;
+    const low52 = m["52WeekLow"] ?? chartMeta?.fiftyTwoWeekLow ?? null;
+
+    // 밸류에이션 지표
+    const trailingPE = m.peBasicExclExtraTTM ?? m.peTTM ?? null;
+    const forwardPE = m.peAnnual ?? null;
+    const pb = m.pbQuarterly ?? m.pbAnnual ?? null;
+    const ps = m.psAnnual ?? m.psTTM ?? null;
+    const evEbitda = m["ev/ebitdaTTM"] ?? ((m.currentEv != null && m.ebitdTTM != null)
+      ? m.currentEv / m.ebitdTTM : null);
+
+    // 기업 정보
+    const marketCap = profile?.marketCapitalization
+      ? profile.marketCapitalization * 1e6 // Finnhub은 millions 단위
+      : null;
+    const sector = profile?.finnhubIndustry ?? null;
+    const industry = profile?.finnhubIndustry ?? null;
+    const beta = m.beta ?? null;
+
+    // 수익성
+    const profitMargin = m.netProfitMarginTTM != null ? m.netProfitMarginTTM / 100 : null;
+    const roe = m.roeTTM != null ? m.roeTTM / 100 : null;
+    const revGrowth = m.revenueGrowthQuarterlyYoy != null ? m.revenueGrowthQuarterlyYoy / 100 : null;
+    const earnGrowth = m.epsGrowthQuarterlyYoy != null ? m.epsGrowthQuarterlyYoy / 100 : null;
+    const divYield = m.dividendYieldIndicatedAnnual != null ? m.dividendYieldIndicatedAnnual / 100 : null;
+    const eps = m.epsBasicExclExtraItemsTTM ?? m.epsTTM ?? null;
+    const bookVal = m.bookValuePerShareQuarterly ?? null;
+
+    // 52주 위치
     let pos52: number | null = null;
     if (currentPrice != null && high52 != null && low52 != null && high52 !== low52) {
       pos52 = Math.max(0, Math.min(100, Math.round(((currentPrice - low52) / (high52 - low52)) * 100)));
     }
 
-    const peVal = assessPE(trailingPE, isCrypto ? "Crypto" : sector);
+    const peVal = assessPE(trailingPE, sector);
     const pbVal = assessPB(pb);
     const psVal = assessPS(ps);
     const round2 = (v: number | null) => v != null && isFinite(v) ? parseFloat(v.toFixed(2)) : null;
@@ -265,15 +289,15 @@ export async function fetchFundamentals(
       forwardPE: round2(forwardPE),
       priceToBook: round2(pb),
       priceToSales: round2(ps),
-      enterpriseToEbitda: round2(evEbitda),
+      enterpriseToEbitda: round2(typeof evEbitda === "number" ? evEbitda : null),
       marketCap,
       sector,
       industry,
-      profitMargin: profitMargin != null ? round2(profitMargin / 100) : null, // FMP는 %로 줌
-      returnOnEquity: roe != null ? round2(roe / 100) : null,
-      revenueGrowth: null, // FMP free tier에서 별도 호출 필요
-      earningsGrowth: null,
-      dividendYield: round2(divYield),
+      profitMargin,
+      returnOnEquity: roe,
+      revenueGrowth: revGrowth,
+      earningsGrowth: earnGrowth,
+      dividendYield: divYield,
       peValuation: peVal,
       pbValuation: pbVal,
       psValuation: psVal,
@@ -281,19 +305,20 @@ export async function fetchFundamentals(
       fiftyTwoWeekPosition: pos52,
       isCrypto,
       epsTrailing: round2(eps),
-      bookValue: null,
+      bookValue: round2(bookVal),
       beta: round2(beta),
     };
 
-    // FMP 데이터가 있으면 캐시 (없으면 짧게 캐시)
-    if (profile || ratios) {
+    const hasData = profile || (metrics?.metric && Object.keys(metrics.metric).length > 0);
+    if (hasData) {
       setCache(cacheKey, data);
-    } else if (chartMeta) {
-      // Yahoo fallback만 사용 → 짧은 캐시
-      fCache.set(cacheKey, { data, ts: Date.now() - CACHE_TTL + 2 * 60_000 }); // 2분
+      console.log(`[Fundamentals] ${symbol}: Finnhub success (profile=${!!profile}, metrics=${!!metrics?.metric})`);
+    } else {
+      // 짧은 캐시
+      fCache.set(cacheKey, { data, ts: Date.now() - CACHE_TTL + 2 * 60_000 });
+      console.log(`[Fundamentals] ${symbol}: Finnhub no data, chartMeta=${!!chartMeta}`);
     }
 
-    console.log(`[Fundamentals] ${symbol}: profile=${!!profile}, ratios=${!!ratios}, chartMeta=${!!chartMeta}`);
     return data;
   } catch (e) {
     console.warn(`Fundamentals fetch failed for ${symbol}:`, e);
