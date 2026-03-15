@@ -1,22 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import dynamic from "next/dynamic";
+import InteractiveGlobe from "@/components/globe/InteractiveGlobe";
 import NewsPanel from "@/components/globe/NewsPanel";
 import type { CountrySummary } from "@/server/services/global-news";
-
-// Three.js는 SSR 불가 → dynamic import
-const InteractiveGlobe = dynamic(
-  () => import("@/components/globe/InteractiveGlobe"),
-  { ssr: false, loading: () => (
-    <div className="w-full h-full flex items-center justify-center">
-      <div className="flex items-center gap-2 text-sm text-zinc-400">
-        <div className="w-5 h-5 border-2 border-white/10 border-t-accent rounded-full animate-spin" />
-        지구본 로딩 중...
-      </div>
-    </div>
-  )}
-);
 
 // 국가 빠른 선택 버튼 목록 (주요국)
 const QUICK_SELECT = [

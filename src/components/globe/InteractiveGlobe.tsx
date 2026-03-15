@@ -1,8 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useCallback } from "react";
-import * as THREE from "three";
-import { EARTH_TEXTURE_DATA } from "./earth-texture-data";
+import { useState } from "react";
 
 interface CountryPoint {
   code: string;
@@ -21,298 +19,177 @@ interface InteractiveGlobeProps {
   onSelectCountry: (code: string) => void;
 }
 
-function latLngToVec3(lat: number, lng: number, r: number): THREE.Vector3 {
-  const phi = (90 - lat) * (Math.PI / 180);
-  const theta = (lng + 180) * (Math.PI / 180);
-  return new THREE.Vector3(
-    -r * Math.sin(phi) * Math.cos(theta),
-    r * Math.cos(phi),
-    r * Math.sin(phi) * Math.sin(theta)
-  );
+// Mercator 투영: 위도/경도 → SVG x,y (%)
+function project(lat: number, lng: number): { x: number; y: number } {
+  const x = ((lng + 180) / 360) * 100;
+  // Mercator y 보정
+  const latRad = (lat * Math.PI) / 180;
+  const mercY = Math.log(Math.tan(Math.PI / 4 + latRad / 2));
+  const y = 50 - (mercY / (2 * Math.PI)) * 100 * 0.8;
+  return { x: Math.max(1, Math.min(99, x)), y: Math.max(3, Math.min(97, y)) };
 }
 
-function sentimentToHex(score: number): number {
-  if (score >= 60) return 0x22c55e;
-  if (score >= 50) return 0xeab308;
-  return 0xef4444;
+function sentimentColor(score: number): string {
+  if (score >= 60) return "#22c55e";
+  if (score >= 50) return "#eab308";
+  return "#ef4444";
 }
+
+// ─── 간략화된 대륙 SVG 폴리곤 (Mercator) ───
+const CONTINENT_PATHS = [
+  // 북미
+  "M 8,18 L 12,15 18,14 22,16 24,20 26,25 24,30 22,33 18,35 14,36 10,34 6,30 5,25 6,20 Z",
+  // 중미
+  "M 18,35 L 20,37 22,40 20,42 18,40 Z",
+  // 남미
+  "M 20,42 L 24,44 27,48 28,55 26,62 24,68 22,70 20,68 18,60 19,52 18,46 Z",
+  // 유럽
+  "M 46,15 L 48,13 52,12 56,14 58,16 56,20 54,22 50,24 48,22 46,20 44,18 Z",
+  // 아프리카
+  "M 46,28 L 50,26 54,28 56,32 58,38 56,48 54,54 50,58 48,56 44,48 42,40 44,34 Z",
+  // 러시아/중앙아시아
+  "M 56,10 L 60,8 70,7 80,8 88,10 92,12 90,16 86,18 80,18 72,16 64,16 58,14 Z",
+  // 중동
+  "M 56,22 L 60,20 64,22 66,26 64,30 60,28 56,26 Z",
+  // 남아시아 (인도)
+  "M 64,26 L 68,24 72,26 74,30 72,36 68,38 66,34 64,30 Z",
+  // 동남아
+  "M 74,32 L 78,30 82,32 84,38 80,40 76,38 74,36 Z",
+  // 동아시아
+  "M 76,16 L 80,14 84,16 86,20 84,24 80,26 76,24 74,20 Z",
+  // 호주
+  "M 80,52 L 86,48 92,50 94,56 90,60 84,58 80,56 Z",
+];
 
 export default function InteractiveGlobe({ countries, selectedCountry, onSelectCountry }: InteractiveGlobeProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const markersGroupRef = useRef<THREE.Group | null>(null);
-  const markerMeshesRef = useRef<THREE.Mesh[]>([]);
-  const globeRef = useRef<THREE.Group | null>(null);
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
-
-  const isDraggingRef = useRef(false);
-  const dragStartRef = useRef({ x: 0, y: 0 });
-  const prevMouseRef = useRef({ x: 0, y: 0 });
-  const rotRef = useRef({ x: 0.25, y: -1.8 });
-  const autoRotRef = useRef(true);
-  const timeRef = useRef(0);
-  const hasDraggedRef = useRef(false);
-
-  const raycaster = useRef(new THREE.Raycaster());
-  const mouse = useRef(new THREE.Vector2());
-
-  useEffect(() => {
-    if (!containerRef.current) return;
-    const el = containerRef.current;
-    const W = el.clientWidth;
-    const H = el.clientHeight;
-
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(45, W / H, 0.1, 100);
-    camera.position.z = 2.8;
-    cameraRef.current = camera;
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setSize(W, H);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setClearColor(0x000000, 0);
-    el.appendChild(renderer.domElement);
-
-    scene.add(new THREE.AmbientLight(0xffffff, 1.2));
-    const dl = new THREE.DirectionalLight(0xffffff, 0.4);
-    dl.position.set(5, 3, 5);
-    scene.add(dl);
-
-    const globe = new THREE.Group();
-    scene.add(globe);
-    globeRef.current = globe;
-
-    // ── 지구 구체 (인라인 텍스처) ──
-    const earthGeo = new THREE.SphereGeometry(1, 64, 64);
-    const earthMat = new THREE.MeshPhongMaterial({
-      color: 0x1a2030,
-      specular: 0x222244,
-      shininess: 15,
-    });
-    const earthMesh = new THREE.Mesh(earthGeo, earthMat);
-    globe.add(earthMesh);
-
-    // 인라인 base64 텍스처 로드 (CORS 무관)
-    const img = new Image();
-    img.onload = () => {
-      const texture = new THREE.Texture(img);
-      texture.needsUpdate = true;
-      earthMat.map = texture;
-      earthMat.color.set(0xffffff);
-      earthMat.emissive.set(0x0a2030);
-      earthMat.emissiveIntensity = 0.3;
-      earthMat.needsUpdate = true;
-    };
-    img.src = EARTH_TEXTURE_DATA;
-
-    // ── 대기 글로우 ──
-    const atmosGeo = new THREE.SphereGeometry(1.05, 64, 64);
-    const atmosMat = new THREE.ShaderMaterial({
-      vertexShader: `
-        varying vec3 vNormal;
-        void main() {
-          vNormal = normalize(normalMatrix * normal);
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: `
-        varying vec3 vNormal;
-        void main() {
-          float intensity = pow(0.55 - dot(vNormal, vec3(0,0,1)), 2.0);
-          gl_FragColor = vec4(0.3, 0.6, 1.0, intensity * 0.45);
-        }
-      `,
-      blending: THREE.AdditiveBlending,
-      side: THREE.BackSide,
-      transparent: true,
-    });
-    globe.add(new THREE.Mesh(atmosGeo, atmosMat));
-
-    // ── 마커 그룹 ──
-    const mGroup = new THREE.Group();
-    globe.add(mGroup);
-    markersGroupRef.current = mGroup;
-
-    globe.rotation.x = rotRef.current.x;
-    globe.rotation.y = rotRef.current.y;
-
-    const onResize = () => {
-      const w2 = el.clientWidth, h2 = el.clientHeight;
-      camera.aspect = w2 / h2;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w2, h2);
-    };
-    window.addEventListener("resize", onResize);
-
-    let rafId = 0;
-    const animate = () => {
-      rafId = requestAnimationFrame(animate);
-      timeRef.current += 0.016;
-      if (autoRotRef.current && !isDraggingRef.current) {
-        rotRef.current.y += 0.0012;
-        globe.rotation.y = rotRef.current.y;
-      }
-      markerMeshesRef.current.forEach((m) => {
-        if (m.userData.pulse) {
-          const s = 1 + Math.sin(timeRef.current * 3 + m.userData.phase) * 0.3;
-          m.scale.set(s, s, s);
-          (m.material as THREE.MeshBasicMaterial).opacity =
-            0.5 - Math.sin(timeRef.current * 3 + m.userData.phase) * 0.2;
-        }
-      });
-      renderer.render(scene, camera);
-    };
-    animate();
-
-    return () => {
-      cancelAnimationFrame(rafId);
-      window.removeEventListener("resize", onResize);
-      renderer.dispose();
-      if (el.contains(renderer.domElement)) el.removeChild(renderer.domElement);
-    };
-  }, []);
-
-  // ─── 마커 업데이트 ───
-  useEffect(() => {
-    const mg = markersGroupRef.current;
-    if (!mg) return;
-
-    while (mg.children.length) {
-      const c = mg.children[0];
-      mg.remove(c);
-      if (c instanceof THREE.Mesh) {
-        c.geometry.dispose();
-        (c.material as THREE.Material).dispose();
-      }
-    }
-    markerMeshesRef.current = [];
-
-    countries.forEach((c, i) => {
-      const pos = latLngToVec3(c.lat, c.lng, 1.015);
-      const sel = c.code === selectedCountry;
-      const col = sentimentToHex(c.sentiment);
-      const hasNews = c.articleCount > 0;
-
-      const sz = sel ? 0.05 : hasNews ? 0.032 : 0.016;
-      const geo = new THREE.SphereGeometry(sz, 16, 16);
-      const mat = new THREE.MeshBasicMaterial({
-        color: col,
-        transparent: true,
-        opacity: sel ? 1 : hasNews ? 0.9 : 0.5,
-      });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.copy(pos);
-      mesh.userData = { countryCode: c.code };
-      mg.add(mesh);
-      markerMeshesRef.current.push(mesh);
-
-      if (hasNews || sel) {
-        const rg = new THREE.RingGeometry(sz * 1.8, sz * 2.4, 32);
-        const rm = new THREE.MeshBasicMaterial({
-          color: sel ? 0xffffff : col,
-          transparent: true,
-          opacity: 0.5,
-          side: THREE.DoubleSide,
-        });
-        const ring = new THREE.Mesh(rg, rm);
-        ring.position.copy(pos);
-        ring.lookAt(0, 0, 0);
-        ring.userData = { pulse: true, phase: i * 0.8 };
-        mg.add(ring);
-        markerMeshesRef.current.push(ring);
-      }
-
-      if (sel) {
-        const outerPos = latLngToVec3(c.lat, c.lng, 1.2);
-        const mid = pos.clone().lerp(outerPos, 0.5);
-        const beamLen = outerPos.clone().sub(pos).length();
-        const bg = new THREE.CylinderGeometry(0.004, 0.004, beamLen, 8);
-        const bm = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.7 });
-        const beam = new THREE.Mesh(bg, bm);
-        beam.position.copy(mid);
-        beam.lookAt(0, 0, 0);
-        beam.rotateX(Math.PI / 2);
-        mg.add(beam);
-
-        const opGeo = new THREE.SphereGeometry(0.018, 12, 12);
-        const op = new THREE.Mesh(opGeo, new THREE.MeshBasicMaterial({ color: col }));
-        op.position.copy(outerPos);
-        mg.add(op);
-      }
-    });
-  }, [countries, selectedCountry]);
-
-  const onDown = useCallback((e: React.PointerEvent) => {
-    isDraggingRef.current = true;
-    hasDraggedRef.current = false;
-    autoRotRef.current = false;
-    prevMouseRef.current = { x: e.clientX, y: e.clientY };
-    dragStartRef.current = { x: e.clientX, y: e.clientY };
-  }, []);
-
-  const onMove = useCallback((e: React.PointerEvent) => {
-    if (!isDraggingRef.current || !globeRef.current) return;
-    const dx = e.clientX - prevMouseRef.current.x;
-    const dy = e.clientY - prevMouseRef.current.y;
-    if (Math.abs(e.clientX - dragStartRef.current.x) > 5 || Math.abs(e.clientY - dragStartRef.current.y) > 5) {
-      hasDraggedRef.current = true;
-    }
-    rotRef.current.y += dx * 0.005;
-    rotRef.current.x += dy * 0.005;
-    rotRef.current.x = Math.max(-1.2, Math.min(1.2, rotRef.current.x));
-    globeRef.current.rotation.y = rotRef.current.y;
-    globeRef.current.rotation.x = rotRef.current.x;
-    prevMouseRef.current = { x: e.clientX, y: e.clientY };
-  }, []);
-
-  const onUp = useCallback(() => {
-    isDraggingRef.current = false;
-    setTimeout(() => { autoRotRef.current = true; }, 3000);
-  }, []);
-
-  const onClick = useCallback((e: React.MouseEvent) => {
-    if (hasDraggedRef.current) return;
-    if (!containerRef.current || !cameraRef.current || !markersGroupRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    mouse.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-    mouse.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-    raycaster.current.setFromCamera(mouse.current, cameraRef.current);
-    const hits = raycaster.current.intersectObjects(markersGroupRef.current.children);
-    for (const h of hits) {
-      if (h.object.userData.countryCode) {
-        onSelectCountry(h.object.userData.countryCode);
-        return;
-      }
-    }
-  }, [onSelectCountry]);
+  const [hoveredCountry, setHoveredCountry] = useState<string | null>(null);
 
   return (
-    <div className="relative w-full h-full">
-      <div
-        ref={containerRef}
-        className="w-full h-full cursor-grab active:cursor-grabbing"
-        onPointerDown={onDown}
-        onPointerMove={onMove}
-        onPointerUp={onUp}
-        onPointerLeave={onUp}
-        onClick={onClick}
-      />
+    <div className="relative w-full h-full overflow-hidden select-none">
+      <svg
+        viewBox="0 0 100 75"
+        className="w-full h-full"
+        preserveAspectRatio="xMidYMid meet"
+      >
+        {/* 배경 */}
+        <rect width="100" height="75" fill="#080c18" rx="0.5" />
 
-      {selectedCountry && (() => {
-        const c = countries.find((x) => x.code === selectedCountry);
-        return c ? (
-          <div className="absolute top-4 left-4 bg-surface/90 backdrop-blur-sm border border-white/[0.08] rounded-xl px-3 py-2 shadow-lg">
-            <div className="flex items-center gap-2">
-              <span className="text-xl">{c.flag}</span>
-              <div>
-                <div className="text-sm font-bold text-zinc-200">{c.name}</div>
-                <div className="text-[10px] text-zinc-500">뉴스 {c.articleCount}건 분석</div>
-              </div>
-            </div>
-          </div>
-        ) : null;
-      })()}
+        {/* 그리드 라인 */}
+        {[-60,-30,0,30,60].map((lat) => {
+          const { y } = project(lat, 0);
+          return <line key={`lat${lat}`} x1="0" y1={y} x2="100" y2={y} stroke="#1a1f30" strokeWidth="0.1" />;
+        })}
+        {[-120,-60,0,60,120].map((lng) => {
+          const { x } = project(0, lng);
+          return <line key={`lng${lng}`} x1={x} y1="0" x2={x} y2="75" stroke="#1a1f30" strokeWidth="0.1" />;
+        })}
 
-      <div className="absolute bottom-12 right-3 bg-surface/80 backdrop-blur-sm border border-white/[0.06] rounded-lg px-2.5 py-2 text-[10px]">
+        {/* 대륙 실루엣 */}
+        {CONTINENT_PATHS.map((d, i) => (
+          <path
+            key={i}
+            d={d}
+            fill="#0f1a28"
+            stroke="#1e3a4a"
+            strokeWidth="0.15"
+            opacity="0.8"
+          />
+        ))}
+
+        {/* 적도선 강조 */}
+        {(() => {
+          const { y } = project(0, 0);
+          return <line x1="0" y1={y} x2="100" y2={y} stroke="#1e3a4a" strokeWidth="0.15" strokeDasharray="0.5,0.5" />;
+        })()}
+
+        {/* 국가 마커 */}
+        {countries.map((c) => {
+          const { x, y } = project(c.lat, c.lng);
+          const sel = c.code === selectedCountry;
+          const hov = c.code === hoveredCountry;
+          const col = sentimentColor(c.sentiment);
+          const hasNews = c.articleCount > 0;
+          const r = sel ? 1.8 : hov ? 1.5 : hasNews ? 1.1 : 0.6;
+
+          return (
+            <g
+              key={c.code}
+              onClick={() => onSelectCountry(c.code)}
+              onMouseEnter={() => setHoveredCountry(c.code)}
+              onMouseLeave={() => setHoveredCountry(null)}
+              className="cursor-pointer"
+            >
+              {/* 펄스 링 (뉴스 있는 국가) */}
+              {(hasNews || sel) && (
+                <>
+                  <circle cx={x} cy={y} r={r * 2.5} fill="none" stroke={col} strokeWidth="0.1" opacity="0.3">
+                    <animate attributeName="r" from={r * 1.5} to={r * 3} dur="2s" repeatCount="indefinite" />
+                    <animate attributeName="opacity" from="0.4" to="0" dur="2s" repeatCount="indefinite" />
+                  </circle>
+                  <circle cx={x} cy={y} r={r * 1.8} fill="none" stroke={col} strokeWidth="0.15" opacity="0.2">
+                    <animate attributeName="r" from={r * 1.2} to={r * 2.5} dur="2s" begin="0.5s" repeatCount="indefinite" />
+                    <animate attributeName="opacity" from="0.3" to="0" dur="2s" begin="0.5s" repeatCount="indefinite" />
+                  </circle>
+                </>
+              )}
+
+              {/* 글로우 */}
+              <circle cx={x} cy={y} r={r * 1.5} fill={col} opacity="0.15" />
+
+              {/* 메인 마커 */}
+              <circle
+                cx={x}
+                cy={y}
+                r={r}
+                fill={col}
+                stroke={sel ? "white" : "none"}
+                strokeWidth={sel ? 0.3 : 0}
+                opacity={sel ? 1 : hasNews ? 0.9 : 0.5}
+                className="transition-all duration-200"
+              />
+
+              {/* 국가 라벨 (호버/선택 시) */}
+              {(hov || sel) && (
+                <g>
+                  <rect
+                    x={x + 2}
+                    y={y - 3.5}
+                    width={c.name.length * 1.8 + 4}
+                    height="5"
+                    rx="1"
+                    fill="#1a1f2e"
+                    stroke="#2a3040"
+                    strokeWidth="0.15"
+                    opacity="0.95"
+                  />
+                  <text
+                    x={x + 3.5}
+                    y={y - 0.5}
+                    fontSize="2.2"
+                    fill="white"
+                    fontWeight="bold"
+                    fontFamily="system-ui"
+                  >
+                    {c.flag} {c.name}
+                  </text>
+                  <text
+                    x={x + 3.5}
+                    y={y + 1.5}
+                    fontSize="1.5"
+                    fill={col}
+                    fontFamily="system-ui"
+                  >
+                    {c.label} · {c.sentiment}점
+                  </text>
+                </g>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+
+      {/* 범례 */}
+      <div className="absolute bottom-3 right-3 bg-surface/80 backdrop-blur-sm border border-white/[0.06] rounded-lg px-2.5 py-2 text-[10px]">
         <div className="flex items-center gap-1.5 mb-1">
           <span className="w-2 h-2 rounded-full bg-emerald-500" /><span className="text-zinc-400">긍정</span>
         </div>
@@ -325,7 +202,7 @@ export default function InteractiveGlobe({ countries, selectedCountry, onSelectC
       </div>
 
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-[10px] text-zinc-600 pointer-events-none">
-        드래그하여 회전 · 마커 클릭하여 뉴스 보기
+        국가 마커를 클릭하여 뉴스 보기
       </div>
     </div>
   );
