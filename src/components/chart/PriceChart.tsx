@@ -1,20 +1,31 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { createChart, AreaSeries, HistogramSeries, LineSeries } from "lightweight-charts";
+import {
+  createChart,
+  AreaSeries,
+  CandlestickSeries,
+  HistogramSeries,
+  LineSeries,
+} from "lightweight-charts";
 import { useAppStore } from "@/stores/app-store";
-import type { ChartInterval } from "@/stores/app-store";
+import type { ChartInterval, ChartMode } from "@/stores/app-store";
 
-type ChartDataPoint = { time: number; value: number; volume: number };
+type ChartDataPoint = {
+  time: number;
+  value: number;
+  open?: number;
+  high?: number;
+  low?: number;
+  close?: number;
+  volume: number;
+};
 type PinMarker = { time: number; sentiment: string; username: string };
 
 interface PriceChartProps {
   data: ChartDataPoint[];
   pins?: PinMarker[];
   chartInterval?: ChartInterval;
-  /** @deprecated use chartInterval instead */
-  range?: number;
-  dailyData?: ChartDataPoint[];
 }
 
 /** 이동평균 계산 */
@@ -30,10 +41,6 @@ function calcMA(data: { time: number; value: number }[], period: number) {
 
 /**
  * 토스증권 방식: 캔들 타입에 따른 MA 라벨
- * 일봉 → MA5일, MA20일, MA60일, MA120일
- * 주봉 → MA5주, MA20주, MA60주, MA120주
- * 월봉 → MA5월, MA20월, MA60월, MA120월
- * 연봉 → MA5년, MA20년, MA60년, MA120년
  */
 function getMALabel(period: number, interval: ChartInterval): string {
   switch (interval) {
@@ -51,10 +58,12 @@ export default function PriceChart({
 }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
-  const { detailedChart, maLines, setCrosshair, setPinPoint } = useAppStore();
+  const { chartMode, detailedChart, maLines, setCrosshair, setPinPoint } = useAppStore();
 
-  // 자세한 차트 모드에서는 MA 표시
   const showMA = detailedChart;
+  const isCandlestick = chartMode === "candlestick";
+  // OHLC 데이터가 있는지 확인 (CoinGecko는 OHLC가 없을 수 있음)
+  const hasOHLC = data.length > 0 && data[0].open != null && data[0].open !== data[0].close;
 
   useEffect(() => {
     if (!containerRef.current || !data.length) return;
@@ -88,27 +97,52 @@ export default function PriceChart({
     });
     chartRef.current = chart;
 
-    const isUp = data[data.length - 1].value >= data[0].value;
-    const lineColor = isUp ? "#22c55e" : "#ef4444";
+    let mainSeries: any;
 
-    const areaSeries = chart.addSeries(AreaSeries, {
-      lineColor,
-      lineWidth: 2,
-      topColor: isUp ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)",
-      bottomColor: isUp ? "rgba(34,197,94,0.01)" : "rgba(239,68,68,0.01)",
-      crosshairMarkerRadius: 5,
-      crosshairMarkerBorderColor: lineColor,
-      crosshairMarkerBackgroundColor: "#111114",
-    });
-    areaSeries.setData(data.map((d) => ({ time: d.time as any, value: d.value })));
+    if (isCandlestick && hasOHLC) {
+      // ─── 캔들스틱 모드 ───
+      const candleSeries = chart.addSeries(CandlestickSeries, {
+        upColor: "#22c55e",
+        downColor: "#ef4444",
+        borderUpColor: "#22c55e",
+        borderDownColor: "#ef4444",
+        wickUpColor: "#22c55e",
+        wickDownColor: "#ef4444",
+      });
+      candleSeries.setData(
+        data.map((d) => ({
+          time: d.time as any,
+          open: d.open ?? d.value,
+          high: d.high ?? d.value,
+          low: d.low ?? d.value,
+          close: d.close ?? d.value,
+        }))
+      );
+      mainSeries = candleSeries;
+    } else {
+      // ─── 라인(영역) 차트 모드 ───
+      const isUp = data[data.length - 1].value >= data[0].value;
+      const lineColor = isUp ? "#22c55e" : "#ef4444";
 
-    // 이동평균선 — 모든 캔들 타입에서 표시
+      const areaSeries = chart.addSeries(AreaSeries, {
+        lineColor,
+        lineWidth: 2,
+        topColor: isUp ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)",
+        bottomColor: isUp ? "rgba(34,197,94,0.01)" : "rgba(239,68,68,0.01)",
+        crosshairMarkerRadius: 5,
+        crosshairMarkerBorderColor: lineColor,
+        crosshairMarkerBackgroundColor: "#111114",
+      });
+      areaSeries.setData(data.map((d) => ({ time: d.time as any, value: d.value })));
+      mainSeries = areaSeries;
+    }
+
+    // ─── 이동평균선 ───
     if (showMA) {
       const priceData = data.map((d) => ({ time: d.time, value: d.value }));
       const enabledMAs = maLines.filter((m) => m.enabled);
 
       for (const ma of enabledMAs) {
-        // 최소 period만큼의 데이터가 있어야 MA 계산 가능
         if (ma.period >= priceData.length) continue;
 
         const maData = calcMA(priceData, ma.period);
@@ -125,7 +159,7 @@ export default function PriceChart({
       }
     }
 
-    // Volume histogram
+    // ─── 거래량 히스토그램 ───
     const volSeries = chart.addSeries(HistogramSeries, {
       priceFormat: { type: "volume" },
       priceScaleId: "vol",
@@ -135,21 +169,30 @@ export default function PriceChart({
       data.map((d, i) => ({
         time: d.time as any,
         value: d.volume,
-        color: d.value >= (data[i - 1]?.value ?? d.value) ? "rgba(34,197,94,0.25)" : "rgba(239,68,68,0.25)",
+        color: (d.close ?? d.value) >= (d.open ?? data[i - 1]?.value ?? d.value)
+          ? "rgba(34,197,94,0.25)"
+          : "rgba(239,68,68,0.25)",
       }))
     );
 
-    // Events
+    // ─── 이벤트 ───
     chart.subscribeCrosshairMove((param: any) => {
       if (!param.time || !param.point) { setCrosshair(null); return; }
-      const price = param.seriesData?.get(areaSeries);
-      if (price) setCrosshair({ time: param.time as number, value: (price as any).value });
+      const price = param.seriesData?.get(mainSeries);
+      if (price) {
+        // 캔들스틱은 close, 라인은 value
+        const val = (price as any).close ?? (price as any).value;
+        if (val != null) setCrosshair({ time: param.time as number, value: val });
+      }
     });
 
     chart.subscribeClick((param: any) => {
       if (!param.time) return;
-      const price = param.seriesData?.get(areaSeries);
-      if (price) setPinPoint({ time: param.time as number, value: (price as any).value });
+      const price = param.seriesData?.get(mainSeries);
+      if (price) {
+        const val = (price as any).close ?? (price as any).value;
+        if (val != null) setPinPoint({ time: param.time as number, value: val });
+      }
     });
 
     const ro = new ResizeObserver((entries) => {
@@ -159,14 +202,13 @@ export default function PriceChart({
     chart.timeScale().fitContent();
 
     return () => { ro.disconnect(); chart.remove(); chartRef.current = null; };
-  }, [data, pins, chartInterval, showMA, maLines, setCrosshair, setPinPoint]);
+  }, [data, pins, chartInterval, chartMode, showMA, maLines, setCrosshair, setPinPoint, isCandlestick, hasOHLC]);
 
-  // 표시 가능한 MA 목록 (데이터 포인트가 충분한 것만)
+  // 표시 가능한 MA 목록
   const visibleMAs = showMA
     ? maLines.filter((m) => m.enabled && m.period < data.length)
     : [];
 
-  // 데이터 부족으로 표시 못 하는 MA
   const hiddenMAs = showMA
     ? maLines.filter((m) => m.enabled && m.period >= data.length)
     : [];

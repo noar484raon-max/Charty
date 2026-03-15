@@ -16,6 +16,9 @@ export type MALine = {
 // 토스증권 방식: 캔들 타입 (일봉/주봉/월봉/연봉)
 export type ChartInterval = "daily" | "weekly" | "monthly" | "yearly";
 
+// 차트 표시 모드: 캔들스틱 or 라인
+export type ChartMode = "candlestick" | "line";
+
 // 각 캔들 타입별 하위 기간 옵션
 export const SUB_RANGES: Record<ChartInterval, { label: string; range: string }[]> = {
   daily: [
@@ -74,7 +77,11 @@ interface AppState {
   pinPoint: ChartPoint | null;
   setPinPoint: (point: ChartPoint | null) => void;
 
-  // Detailed chart mode
+  // Chart display mode (캔들스틱 / 라인)
+  chartMode: ChartMode;
+  setChartMode: (mode: ChartMode) => void;
+
+  // Detailed chart mode (이동평균선)
   detailedChart: boolean;
   setDetailedChart: (v: boolean) => void;
 
@@ -127,6 +134,9 @@ export const useAppStore = create<AppState>((set) => ({
   setCrosshair: (point) => set({ crosshair: point }),
   pinPoint: null,
   setPinPoint: (point) => set({ pinPoint: point }),
+
+  chartMode: "candlestick" as ChartMode,  // 기본: 캔들스틱
+  setChartMode: (mode) => set({ chartMode: mode }),
 
   detailedChart: true,  // 기본값을 true로 변경 (항상 이동평균선 표시)
   setDetailedChart: (v) => set({ detailedChart: v }),

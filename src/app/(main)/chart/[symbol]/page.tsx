@@ -27,8 +27,8 @@ export default function ChartDetailPage() {
   const asset = ASSETS.find((a) => a.symbol.toLowerCase() === symbol);
 
   const {
-    chartInterval, subRange, crosshair, pinPoint, detailedChart,
-    setChartInterval, setSubRange, setCurrentAsset, setDetailedChart, openMemoModal,
+    chartInterval, subRange, crosshair, pinPoint, detailedChart, chartMode,
+    setChartInterval, setSubRange, setCurrentAsset, setDetailedChart, setChartMode, openMemoModal,
   } = useAppStore();
   const [chartData, setChartData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -138,6 +138,18 @@ export default function ChartDetailPage() {
             </button>
           ))}
         </div>
+        <button
+          onClick={() => setChartMode(chartMode === "candlestick" ? "line" : "candlestick")}
+          className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-all flex items-center gap-1.5 ${
+            chartMode === "candlestick"
+              ? "bg-accent/10 border-accent/30 text-accent"
+              : "bg-surface border-white/[0.06] text-zinc-500 hover:text-zinc-300 hover:border-white/10"
+          }`}>
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path d="M9 4v4m0 4v8M9 8h.01M9 12h.01M15 4v8m0 4v4M15 12h.01M15 16h.01" />
+          </svg>
+          {chartMode === "candlestick" ? "캔들" : "라인"}
+        </button>
         <button
           onClick={() => setDetailedChart(!detailedChart)}
           className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-all flex items-center gap-1.5 ${

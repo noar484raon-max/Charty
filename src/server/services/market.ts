@@ -57,41 +57,49 @@ function getYahooParams(days: number): { range: string; interval: string } {
   return { range: "max", interval: "1mo" };
 }
 
-// ─── 연봉 데이터 집계 (월봉 → 연봉) ───
+// ─── 연봉 데이터 집계 (월봉 → 연봉, OHLC 포함) ───
 
-function aggregateToYearly(
-  data: { time: number; value: number; volume: number }[]
-): { time: number; value: number; volume: number }[] {
+function aggregateToYearly(data: ChartDataPoint[]): ChartDataPoint[] {
   const yearMap = new Map<
     number,
-    { time: number; value: number; volume: number; firstTime: number }
+    { time: number; open: number; high: number; low: number; close: number; volume: number }
   >();
 
   for (const d of data) {
-    const date = new Date(d.time * 1000);
-    const year = date.getFullYear();
+    const year = new Date(d.time * 1000).getFullYear();
     const existing = yearMap.get(year);
 
     if (!existing) {
       yearMap.set(year, {
-        time: d.time, // 해당 연도의 마지막 데이터 시점 사용
-        value: d.value,
+        time: d.time,
+        open: d.open,
+        high: d.high,
+        low: d.low,
+        close: d.close,
         volume: d.volume,
-        firstTime: d.time,
       });
     } else {
-      // 연도 내 마지막 데이터 포인트의 가격을 사용, 거래량은 합산
       yearMap.set(year, {
-        time: d.time,
-        value: d.value,
+        time: d.time,        // 마지막 시점
+        open: existing.open,  // 첫 번째 달의 시가 유지
+        high: Math.max(existing.high, d.high),
+        low: Math.min(existing.low, d.low),
+        close: d.close,       // 마지막 달의 종가
         volume: existing.volume + d.volume,
-        firstTime: existing.firstTime,
       });
     }
   }
 
   return Array.from(yearMap.values())
-    .map((v) => ({ time: v.time, value: v.value, volume: v.volume }))
+    .map((v) => ({
+      time: v.time,
+      value: v.close,
+      open: v.open,
+      high: v.high,
+      low: v.low,
+      close: v.close,
+      volume: v.volume,
+    }))
     .sort((a, b) => a.time - b.time);
 }
 
@@ -128,24 +136,49 @@ const FALLBACK_BASES: Record<string, number> = {
   dogecoin: 0.08, "avalanche-2": 35, chainlink: 15, polkadot: 7, polygon: 0.8,
 };
 
-// ─── Yahoo Finance 공통 파싱 ───
+// ─── Yahoo Finance 공통 파싱 (OHLC 포함) ───
 
-function parseYahooResponse(json: any): { time: number; value: number; volume: number }[] {
+export type ChartDataPoint = {
+  time: number;
+  value: number;   // close 가격 (라인 차트용)
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+};
+
+function parseYahooResponse(json: any): ChartDataPoint[] {
   const result = json?.chart?.result?.[0];
   if (!result) return [];
 
   const timestamps = result.timestamp || [];
   const quotes = result.indicators?.quote?.[0] || {};
+  const opens = quotes.open || [];
+  const highs = quotes.high || [];
+  const lows = quotes.low || [];
   const closes = quotes.close || [];
   const volumes = quotes.volume || [];
 
   return timestamps
-    .map((t: number, i: number) => ({
-      time: t,
-      value: closes[i] != null ? parseFloat(Number(closes[i]).toFixed(2)) : null,
-      volume: volumes[i] || 0,
-    }))
-    .filter((p: any) => p.value !== null);
+    .map((t: number, i: number) => {
+      const c = closes[i];
+      if (c == null) return null;
+      const close = parseFloat(Number(c).toFixed(2));
+      const open = opens[i] != null ? parseFloat(Number(opens[i]).toFixed(2)) : close;
+      const high = highs[i] != null ? parseFloat(Number(highs[i]).toFixed(2)) : close;
+      const low = lows[i] != null ? parseFloat(Number(lows[i]).toFixed(2)) : close;
+      return {
+        time: t,
+        value: close,
+        open,
+        high,
+        low,
+        close,
+        volume: volumes[i] || 0,
+      };
+    })
+    .filter((p: any) => p !== null) as ChartDataPoint[];
 }
 
 // ─── 인터벌 기반 Yahoo Finance fetcher (새로운 방식) ───
@@ -259,12 +292,19 @@ export async function fetchChartByInterval(
       );
       if (!r.ok) throw new Error(`CoinGecko API error: ${r.status}`);
       const d = await r.json();
-      const result = (d.prices || []).map(
-        ([t, v]: [number, number], i: number) => ({
-          time: Math.floor(t / 1000),
-          value: parseFloat(v.toFixed(2)),
-          volume: d.total_volumes?.[i]?.[1] ?? 0,
-        })
+      const result: ChartDataPoint[] = (d.prices || []).map(
+        ([t, v]: [number, number], i: number) => {
+          const price = parseFloat(v.toFixed(2));
+          return {
+            time: Math.floor(t / 1000),
+            value: price,
+            open: price,
+            high: price,
+            low: price,
+            close: price,
+            volume: d.total_volumes?.[i]?.[1] ?? 0,
+          };
+        }
       );
       if (result.length > 0) {
         setCache(cacheKey, result);
@@ -292,12 +332,19 @@ export async function fetchCryptoData(symbol: string, days: number) {
     );
     if (!r.ok) throw new Error(`CoinGecko API error: ${r.status}`);
     const d = await r.json();
-    const result = (d.prices || []).map(
-      ([t, v]: [number, number], i: number) => ({
-        time: Math.floor(t / 1000),
-        value: parseFloat(v.toFixed(2)),
-        volume: d.total_volumes?.[i]?.[1] ?? 0,
-      })
+    const result: ChartDataPoint[] = (d.prices || []).map(
+      ([t, v]: [number, number], i: number) => {
+        const price = parseFloat(v.toFixed(2));
+        return {
+          time: Math.floor(t / 1000),
+          value: price,
+          open: price,
+          high: price,
+          low: price,
+          close: price,
+          volume: d.total_volumes?.[i]?.[1] ?? 0,
+        };
+      }
     );
     if (result.length > 0) {
       setCache(cacheKey, result);
