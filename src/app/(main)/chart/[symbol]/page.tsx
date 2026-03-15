@@ -11,6 +11,7 @@ import PriceChart from "@/components/chart/PriceChart";
 import MemoCard from "@/components/memo/MemoCard";
 import MemoCreateModal from "@/components/memo/MemoCreateModal";
 import ValuationCard from "@/components/analysis/ValuationCard";
+import SentimentCard from "@/components/analysis/SentimentCard";
 
 // 토스증권 방식: 캔들 타입 탭
 const INTERVALS: { label: string; key: ChartInterval }[] = [
@@ -216,6 +217,13 @@ export default function ChartDetailPage() {
       <div className="mb-3">
         <ValuationCard symbol={asset.symbol} type={asset.type} assetName={asset.name} />
       </div>
+
+      {/* Sentiment Analysis Card */}
+      {asset.type === "us_stock" && (
+        <div className="mb-3">
+          <SentimentCard symbol={asset.symbol} assetName={asset.name} />
+        </div>
+      )}
 
       {/* Pin bar */}
       <div className="flex items-center gap-3 bg-surface border border-white/[0.06] rounded-xl px-4 py-2.5 mb-6 min-h-[46px]">
