@@ -50,10 +50,10 @@ interface AppState {
 }
 
 const DEFAULT_MA_LINES: MALine[] = [
-  { period: 5, color: "#f59e0b", enabled: true },
-  { period: 20, color: "#3b82f6", enabled: true },
-  { period: 60, color: "#a855f7", enabled: false },
-  { period: 120, color: "#ef4444", enabled: false },
+  { period: 5, color: "#22c55e", enabled: true },   // 녹색
+  { period: 20, color: "#ef4444", enabled: true },   // 빨간색
+  { period: 60, color: "#f59e0b", enabled: true },   // 주황색
+  { period: 120, color: "#a855f7", enabled: true },   // 보라색
 ];
 
 export const useAppStore = create<AppState>((set) => ({

@@ -26,19 +26,25 @@ function calcMA(data: { time: number; value: number }[], period: number) {
 }
 
 /**
- * MA 표시 가능 여부:
- * - 일봉 이상 (range >= 90일)에서만 MA 표시
- * - 분봉/시간봉에서는 MA가 의미 없으므로 숨김
+ * 시간대별 캔들 간격과 MA 라벨 매핑
+ * 토스증권 방식: 각 시간대의 캔들 단위에 맞춰 MA 라벨 표시
+ *
+ * range(days)  → Yahoo interval  → 캔들 단위  → MA 라벨
+ * 1 (1D)       → 5m             → 5분봉      → MA5, MA20, MA60, MA120 (캔들 기준)
+ * 7 (1W)       → 15m            → 15분봉     → MA5, MA20, MA60, MA120
+ * 30 (1M)      → 1h             → 시간봉     → MA5, MA20, MA60, MA120
+ * 90 (3M)      → 1d             → 일봉       → MA5일, MA20일, MA60일, MA120일
+ * 365 (1Y)     → 1d             → 일봉       → MA5일, MA20일, MA60일, MA120일
+ * 1825 (5Y)    → 1wk            → 주봉       → MA5주, MA20주, MA60주, MA120주
+ * 3650+ (ALL)  → 1mo            → 월봉       → MA5월, MA20월, MA60월, MA120월
  */
-function canShowMA(rangeDays: number): boolean {
-  return rangeDays >= 90;
-}
-
-/** 차트 기간에 따른 MA 라벨 */
 function getMALabel(period: number, rangeDays: number): string {
   if (rangeDays >= 3650) return `MA${period}월`;
   if (rangeDays >= 1825) return `MA${period}주`;
-  return `MA${period}일`;
+  if (rangeDays >= 90) return `MA${period}일`;
+  if (rangeDays >= 30) return `MA${period}h`;
+  if (rangeDays >= 7) return `MA${period}`;
+  return `MA${period}`;
 }
 
 export default function PriceChart({ data, pins = [], range = 7 }: PriceChartProps) {
@@ -46,7 +52,8 @@ export default function PriceChart({ data, pins = [], range = 7 }: PriceChartPro
   const chartRef = useRef<any>(null);
   const { detailedChart, maLines, setCrosshair, setPinPoint } = useAppStore();
 
-  const showMA = detailedChart && canShowMA(range);
+  // 자세한 차트 모드에서는 항상 MA 표시 가능
+  const showMA = detailedChart;
 
   useEffect(() => {
     if (!containerRef.current || !data.length) return;
@@ -94,13 +101,15 @@ export default function PriceChart({ data, pins = [], range = 7 }: PriceChartPro
     });
     areaSeries.setData(data.map((d) => ({ time: d.time as any, value: d.value })));
 
-    // 이동평균선 — 일봉 이상(3M+)에서만 표시
+    // 이동평균선 — 모든 시간대에서 표시 (데이터 포인트 충분할 때)
     if (showMA) {
       const priceData = data.map((d) => ({ time: d.time, value: d.value }));
       const enabledMAs = maLines.filter((m) => m.enabled);
 
       for (const ma of enabledMAs) {
+        // 최소 period만큼의 데이터가 있어야 MA 계산 가능
         if (ma.period >= priceData.length) continue;
+
         const maData = calcMA(priceData, ma.period);
         if (maData.length > 0) {
           const maSeries = chart.addSeries(LineSeries, {
@@ -151,9 +160,14 @@ export default function PriceChart({ data, pins = [], range = 7 }: PriceChartPro
     return () => { ro.disconnect(); chart.remove(); chartRef.current = null; };
   }, [data, pins, range, showMA, maLines, setCrosshair, setPinPoint]);
 
-  // 표시 가능한 MA 목록
+  // 표시 가능한 MA 목록 (데이터 포인트가 충분한 것만)
   const visibleMAs = showMA
     ? maLines.filter((m) => m.enabled && m.period < data.length)
+    : [];
+
+  // 데이터 부족으로 표시 못 하는 MA
+  const hiddenMAs = showMA
+    ? maLines.filter((m) => m.enabled && m.period >= data.length)
     : [];
 
   return (
@@ -164,7 +178,7 @@ export default function PriceChart({ data, pins = [], range = 7 }: PriceChartPro
         </div>
       )}
       {visibleMAs.length > 0 && (
-        <div className="absolute top-3 left-3 z-10 flex items-center gap-2 pointer-events-none">
+        <div className="absolute top-3 left-3 z-10 flex items-center gap-2 flex-wrap pointer-events-none">
           {visibleMAs.map((ma) => (
             <span
               key={ma.period}
@@ -174,11 +188,11 @@ export default function PriceChart({ data, pins = [], range = 7 }: PriceChartPro
               {getMALabel(ma.period, range)}
             </span>
           ))}
-        </div>
-      )}
-      {detailedChart && !canShowMA(range) && (
-        <div className="absolute top-3 left-3 z-10 rounded-full px-2.5 py-1 text-[10px] text-zinc-500 bg-black/50 backdrop-blur-sm border border-white/[0.08] pointer-events-none">
-          이동평균선은 3M 이상에서 표시됩니다
+          {hiddenMAs.length > 0 && (
+            <span className="rounded-full px-2 py-0.5 text-[9px] text-zinc-500 bg-black/50 backdrop-blur-sm border border-white/[0.08]">
+              +{hiddenMAs.length} (데이터 부족)
+            </span>
+          )}
         </div>
       )}
       <div ref={containerRef} className="w-full h-[340px] md:h-[400px]" />
