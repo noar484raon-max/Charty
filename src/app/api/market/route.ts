@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchCryptoData, fetchStockData, fetchKrStockData, searchAssets } from "@/server/services/market";
+import { fetchCryptoData, fetchStockData, searchAssets } from "@/server/services/market";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const type = searchParams.get("type"); // crypto | stock | search
+  const type = searchParams.get("type");
   const symbol = searchParams.get("symbol") || "";
   const days = parseInt(searchParams.get("days") || "7");
   const query = searchParams.get("q") || "";
@@ -19,18 +19,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(data);
     }
 
-    if (type === "us_stock") {
-      const data = await fetchStockData(symbol, days);
-      return NextResponse.json(data);
-    }
-
-    if (type === "kr_stock") {
-      const data = await fetchKrStockData(symbol, days);
-      return NextResponse.json(data);
-    }
-
-    // backward compat
-    if (type === "stock") {
+    if (type === "us_stock" || type === "stock") {
       const data = await fetchStockData(symbol, days);
       return NextResponse.json(data);
     }

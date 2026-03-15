@@ -1,4 +1,4 @@
-export type AssetType = "us_stock" | "kr_stock" | "crypto";
+export type AssetType = "us_stock" | "crypto";
 
 export type AssetInfo = {
   symbol: string;
@@ -9,7 +9,6 @@ export type AssetInfo = {
 
 export const ASSET_TYPES: { key: AssetType; label: string }[] = [
   { key: "us_stock", label: "미국 주식" },
-  { key: "kr_stock", label: "한국 주식" },
   { key: "crypto", label: "암호화폐" },
 ];
 
@@ -70,28 +69,6 @@ export const ASSETS: AssetInfo[] = [
   { symbol: "LIN", name: "Linde", ticker: "LIN", type: "us_stock" },
   { symbol: "RTX", name: "RTX Corp", ticker: "RTX", type: "us_stock" },
   { symbol: "NEE", name: "NextEra Energy", ticker: "NEE", type: "us_stock" },
-
-  // ── Korean Stocks (20) ──
-  { symbol: "005930", name: "삼성전자", ticker: "삼성전자", type: "kr_stock" },
-  { symbol: "000660", name: "SK하이닉스", ticker: "SK하이닉스", type: "kr_stock" },
-  { symbol: "373220", name: "LG에너지솔루션", ticker: "LG에너지", type: "kr_stock" },
-  { symbol: "207940", name: "삼성바이오로직스", ticker: "삼성바이오", type: "kr_stock" },
-  { symbol: "005380", name: "현대자동차", ticker: "현대차", type: "kr_stock" },
-  { symbol: "000270", name: "기아", ticker: "기아", type: "kr_stock" },
-  { symbol: "068270", name: "셀트리온", ticker: "셀트리온", type: "kr_stock" },
-  { symbol: "035420", name: "NAVER", ticker: "NAVER", type: "kr_stock" },
-  { symbol: "035720", name: "카카오", ticker: "카카오", type: "kr_stock" },
-  { symbol: "051910", name: "LG화학", ticker: "LG화학", type: "kr_stock" },
-  { symbol: "006400", name: "삼성SDI", ticker: "삼성SDI", type: "kr_stock" },
-  { symbol: "028260", name: "삼성물산", ticker: "삼성물산", type: "kr_stock" },
-  { symbol: "105560", name: "KB금융", ticker: "KB금융", type: "kr_stock" },
-  { symbol: "055550", name: "신한지주", ticker: "신한지주", type: "kr_stock" },
-  { symbol: "034730", name: "SK", ticker: "SK", type: "kr_stock" },
-  { symbol: "003670", name: "포스코퓨처엠", ticker: "포스코퓨처엠", type: "kr_stock" },
-  { symbol: "012330", name: "현대모비스", ticker: "현대모비스", type: "kr_stock" },
-  { symbol: "066570", name: "LG전자", ticker: "LG전자", type: "kr_stock" },
-  { symbol: "003550", name: "LG", ticker: "LG", type: "kr_stock" },
-  { symbol: "032830", name: "삼성생명", ticker: "삼성생명", type: "kr_stock" },
 
   // ── Crypto (10) ──
   { symbol: "bitcoin", name: "Bitcoin", ticker: "BTC", type: "crypto" },

@@ -5,11 +5,8 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatPrice(value: number | null, assetType?: string): string {
+export function formatPrice(value: number | null): string {
   if (value == null) return "—";
-  if (assetType === "kr_stock") {
-    return "₩" + Math.round(value).toLocaleString("ko-KR");
-  }
   if (value >= 1000) return "$" + value.toLocaleString("en-US", { maximumFractionDigits: 0 });
   return "$" + value.toFixed(2);
 }

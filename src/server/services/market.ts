@@ -2,10 +2,8 @@ import { generateMockData } from "@/lib/utils";
 
 // ─── Yahoo Finance 심볼 변환 ───
 
-function toYahooSymbol(symbol: string, type: "us_stock" | "kr_stock" | "crypto"): string {
-  if (type === "kr_stock") return `${symbol}.KS`; // KOSPI
+function toYahooSymbol(symbol: string, type: "us_stock" | "crypto"): string {
   if (type === "crypto") {
-    // CoinGecko id → Yahoo ticker 매핑
     const CRYPTO_MAP: Record<string, string> = {
       bitcoin: "BTC-USD",
       ethereum: "ETH-USD",
@@ -35,7 +33,7 @@ function getYahooParams(days: number): { range: string; interval: string } {
   return { range: "max", interval: "1mo" };
 }
 
-// ─── 메모리 캐시 (API rate limit 대응) ───
+// ─── 메모리 캐시 ───
 
 type CacheEntry = { data: any[]; ts: number };
 const cache = new Map<string, CacheEntry>();
@@ -54,34 +52,25 @@ function setCache(key: string, data: any[]) {
   }
 }
 
-// ─── 기본 가격 (API 실패 시 mock fallback용) ───
+// ─── Fallback 가격 ───
 
 const FALLBACK_BASES: Record<string, number> = {
-  // US Stocks
   AAPL: 182, NVDA: 900, MSFT: 420, TSLA: 250, AMZN: 210, META: 580, GOOGL: 175,
   JPM: 230, V: 290, JNJ: 160, WMT: 175, MA: 470, PG: 165, DIS: 110, NFLX: 700,
   AMD: 160, INTC: 32, BA: 190, CRM: 290, UBER: 75, COST: 920, AVGO: 1700,
   LLY: 780, UNH: 520, HD: 380, ABBV: 175, MRK: 130, PEP: 170, KO: 62,
   TMO: 570, ADBE: 490, CSCO: 50, MCD: 290, LIN: 450, ABT: 115,
   QCOM: 170, RTX: 105, ISRG: 400, AMAT: 195, SBUX: 95, GS: 470, BLK: 800,
-  BKNG: 3700, GILD: 85, PYPL: 65, SQ: 75, SHOP: 80, NEE: 75, NKE: 95,
-  ORCL: 180,
-  // Korean Stocks
-  "005930": 72000, "000660": 180000, "373220": 380000, "207940": 750000,
-  "005380": 250000, "000270": 120000, "068270": 190000, "035420": 210000,
-  "035720": 42000, "051910": 340000, "006400": 380000, "028260": 130000,
-  "105560": 75000, "055550": 52000, "034730": 170000, "003670": 250000,
-  "012330": 230000, "066570": 95000, "003550": 80000, "032830": 65000,
-  // Crypto
+  BKNG: 3700, GILD: 85, PYPL: 65, SQ: 75, SHOP: 80, NEE: 75, NKE: 95, ORCL: 180,
   bitcoin: 70000, ethereum: 2800, solana: 140, ripple: 0.55, cardano: 0.45,
   dogecoin: 0.08, "avalanche-2": 35, chainlink: 15, polkadot: 7, polygon: 0.8,
 };
 
-// ─── Yahoo Finance 통합 데이터 fetcher ───
+// ─── Yahoo Finance fetcher ───
 
 async function fetchYahooFinance(
   symbol: string,
-  type: "us_stock" | "kr_stock" | "crypto",
+  type: "us_stock" | "crypto",
   days: number
 ): Promise<any[]> {
   const yahooSymbol = toYahooSymbol(symbol, type);
@@ -124,17 +113,16 @@ async function fetchYahooFinance(
       setCache(cacheKey, data);
       return data;
     }
-    throw new Error("Empty data after filtering");
+    throw new Error("Empty data");
   } catch (e) {
     console.warn(`Yahoo Finance fallback for ${symbol} (${type}):`, e);
     return generateMockData(days, FALLBACK_BASES[symbol] || 100, symbol);
   }
 }
 
-// ─── 공개 API 함수들 ───
+// ─── 공개 API ───
 
 export async function fetchCryptoData(symbol: string, days: number) {
-  // CoinGecko를 1차로 시도 (암호화폐에 더 안정적), 실패시 Yahoo
   const cacheKey = `crypto_${symbol}_${days}`;
   const cached = getCached(cacheKey, 60_000);
   if (cached) return cached;
@@ -157,17 +145,12 @@ export async function fetchCryptoData(symbol: string, days: number) {
     }
     throw new Error("Empty CoinGecko data");
   } catch {
-    // CoinGecko 실패 시 Yahoo Finance로 fallback
     return fetchYahooFinance(symbol, "crypto", days);
   }
 }
 
 export async function fetchStockData(symbol: string, days: number) {
   return fetchYahooFinance(symbol, "us_stock", days);
-}
-
-export async function fetchKrStockData(symbol: string, days: number) {
-  return fetchYahooFinance(symbol, "kr_stock", days);
 }
 
 // ─── 검색 ───

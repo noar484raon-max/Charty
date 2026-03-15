@@ -9,6 +9,7 @@ import Navbar from "@/components/layout/Navbar";
 import PriceChart from "@/components/chart/PriceChart";
 import MemoCard from "@/components/memo/MemoCard";
 import MemoCreateModal from "@/components/memo/MemoCreateModal";
+import ValuationCard from "@/components/analysis/ValuationCard";
 
 const RANGES = [
   { label: "1D", days: 1 },
@@ -165,6 +166,11 @@ export default function ChartDetailPage() {
           </div>
         )}
         {chartData.length > 0 && <PriceChart data={chartData} pins={chartPins} range={range} dailyData={dailyData} />}
+      </div>
+
+      {/* Valuation Analysis Card */}
+      <div className="mb-3">
+        <ValuationCard symbol={asset.symbol} type={asset.type} assetName={asset.name} />
       </div>
 
       {/* Pin bar */}

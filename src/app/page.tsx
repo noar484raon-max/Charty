@@ -12,6 +12,7 @@ import { useToast } from "@/components/ui/Toast";
 import PriceChart from "@/components/chart/PriceChart";
 import MemoCard from "@/components/memo/MemoCard";
 import MemoCreateModal from "@/components/memo/MemoCreateModal";
+import ValuationCard from "@/components/analysis/ValuationCard";
 
 const RANGES = [
   { label: "1D", days: 1 },
@@ -175,7 +176,7 @@ export default function HomePage() {
     return { price: last, change: last - first, pct: (last - first) / first * 100 };
   }, [chartData]);
 
-  const currencyLabel = currentAsset.type === "kr_stock" ? "KRW" : "USD";
+  const currencyLabel = "USD";
 
   // Pins for chart
   const chartPins = useMemo(
@@ -299,7 +300,7 @@ export default function HomePage() {
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">{a.name}</div>
                     <div className="text-[11px] text-zinc-500">
-                      {a.ticker} · {a.type === "crypto" ? "암호화폐" : a.type === "kr_stock" ? "한국 주식" : "미국 주식"}
+                      {a.ticker} · {a.type === "crypto" ? "암호화폐" : "미국 주식"}
                     </div>
                   </div>
                 </button>
@@ -371,13 +372,13 @@ export default function HomePage() {
         </div>
         <div className="flex items-baseline gap-3 flex-wrap">
           <span className="text-[34px] font-extrabold font-mono tracking-tighter leading-none">
-            {crosshair ? formatPrice(crosshair.value, currentAsset.type) : formatPrice(priceInfo.price, currentAsset.type)}
+            {crosshair ? formatPrice(crosshair.value) : formatPrice(priceInfo.price)}
           </span>
           {!crosshair && priceInfo.change !== 0 && (
             <span className={`text-sm font-mono font-medium px-2 py-0.5 rounded-md ${
               priceInfo.change >= 0 ? "text-up bg-up/10" : "text-down bg-down/10"
             }`}>
-              {priceInfo.change >= 0 ? "+" : ""}{formatPrice(Math.abs(priceInfo.change), currentAsset.type)} ({priceInfo.change >= 0 ? "+" : ""}{priceInfo.pct.toFixed(2)}%)
+              {priceInfo.change >= 0 ? "+" : ""}{formatPrice(Math.abs(priceInfo.change))} ({priceInfo.change >= 0 ? "+" : ""}{priceInfo.pct.toFixed(2)}%)
             </span>
           )}
         </div>
@@ -394,10 +395,15 @@ export default function HomePage() {
         {chartData.length > 0 && <PriceChart data={chartData} pins={chartPins} range={range} dailyData={dailyData} />}
       </div>
 
+      {/* Valuation Analysis Card */}
+      <div className="mb-3">
+        <ValuationCard symbol={currentAsset.symbol} type={currentAsset.type} assetName={currentAsset.name} />
+      </div>
+
       {/* Pin bar */}
       <div className="flex items-center gap-3 bg-surface border border-white/[0.06] rounded-xl px-4 py-2.5 mb-6 min-h-[46px]">
         <div className={`flex-1 text-[13px] font-mono ${pinPoint ? "text-zinc-200" : "text-zinc-600"}`}>
-          {pinPoint ? `📌 ${formatDate(pinPoint.time * 1000)}  ${formatPrice(pinPoint.value, currentAsset.type)}` : "차트를 클릭하여 핀 위치를 선택하세요"}
+          {pinPoint ? `📌 ${formatDate(pinPoint.time * 1000)}  ${formatPrice(pinPoint.value)}` : "차트를 클릭하여 핀 위치를 선택하세요"}
         </div>
         <button
           onClick={() => { if (!user) { router.push("/login"); return; } openMemoModal(); }}
