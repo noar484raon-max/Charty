@@ -1,477 +1,162 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { useRouter } from "next/navigation";
-import { ASSETS, ASSET_TYPES } from "@/lib/assets";
-import { useAppStore, SUB_RANGES } from "@/stores/app-store";
-import type { ChartInterval } from "@/stores/app-store";
-import { useAuth } from "@/components/providers/AuthProvider";
-import { formatPrice, formatDate } from "@/lib/utils";
-import { fetchMemos, createMemo, toggleLike, toggleBookmark, createComment, getUserLikes, getUserBookmarks, fetchComments } from "@/lib/db";
-import { supabase } from "@/lib/supabase";
-import { useToast } from "@/components/ui/Toast";
-import PriceChart from "@/components/chart/PriceChart";
-import MemoCard from "@/components/memo/MemoCard";
-import MemoCreateModal from "@/components/memo/MemoCreateModal";
-import ValuationCard from "@/components/analysis/ValuationCard";
-import SentimentCard from "@/components/analysis/SentimentCard";
+import { useState, useEffect, useCallback } from "react";
+import dynamic from "next/dynamic";
+import NewsPanel from "@/components/globe/NewsPanel";
+import type { CountrySummary } from "@/server/services/global-news";
 
-// 토스증권 방식: 캔들 타입 탭
-const INTERVALS: { label: string; key: ChartInterval }[] = [
-  { label: "일", key: "daily" },
-  { label: "주", key: "weekly" },
-  { label: "월", key: "monthly" },
-  { label: "년", key: "yearly" },
+// Three.js는 SSR 불가 → dynamic import
+const InteractiveGlobe = dynamic(
+  () => import("@/components/globe/InteractiveGlobe"),
+  { ssr: false, loading: () => (
+    <div className="w-full h-full flex items-center justify-center">
+      <div className="flex items-center gap-2 text-sm text-zinc-400">
+        <div className="w-5 h-5 border-2 border-white/10 border-t-accent rounded-full animate-spin" />
+        지구본 로딩 중...
+      </div>
+    </div>
+  )}
+);
+
+// 국가 빠른 선택 버튼 목록 (주요국)
+const QUICK_SELECT = [
+  { code: "us", flag: "🇺🇸", name: "미국" },
+  { code: "gb", flag: "🇬🇧", name: "영국" },
+  { code: "jp", flag: "🇯🇵", name: "일본" },
+  { code: "kr", flag: "🇰🇷", name: "한국" },
+  { code: "cn", flag: "🇨🇳", name: "중국" },
+  { code: "de", flag: "🇩🇪", name: "독일" },
+  { code: "fr", flag: "🇫🇷", name: "프랑스" },
+  { code: "in", flag: "🇮🇳", name: "인도" },
 ];
 
-type MemoItem = {
-  id: string;
-  author: { username: string | null; displayName: string | null; image: string | null };
-  pinPrice: number;
-  pinTimestamp: number;
-  content: string;
-  sentiment: "BULLISH" | "BEARISH" | "NEUTRAL";
-  likeCount: number;
-  commentCount: number;
-  liked: boolean;
-  bookmarked: boolean;
-  asset: string;
-  comments: Array<{ author: { username: string | null; displayName: string | null; image: string | null }; content: string }>;
-};
-
-export default function HomePage() {
-  const router = useRouter();
-  const { user } = useAuth();
-  const { showToast } = useToast();
-  const {
-    assetType, currentAsset, chartInterval, subRange, crosshair, pinPoint, detailedChart, chartMode,
-    setAssetType, setCurrentAsset, setChartInterval, setSubRange, setDetailedChart, setChartMode, openMemoModal,
-  } = useAppStore();
-  const [chartData, setChartData] = useState<any[]>([]);
+export default function GlobalNewsPage() {
+  const [countries, setCountries] = useState<CountrySummary[]>([]);
+  const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [memos, setMemos] = useState<MemoItem[]>([]);
-  const [memosLoading, setMemosLoading] = useState(false);
 
-  // Search state
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchOpen, setSearchOpen] = useState(false);
-  const searchRef = useRef<HTMLDivElement>(null);
-
-  // User likes/bookmarks sets
-  const [userLikes, setUserLikes] = useState<Set<string>>(new Set());
-  const [userBookmarks, setUserBookmarks] = useState<Set<string>>(new Set());
-
-  // Close search on outside click
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (searchRef.current && !searchRef.current.contains(e.target as Node)) setSearchOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
-
-  // Search results
-  const searchResults = useMemo(() => {
-    if (!searchQuery.trim()) return [];
-    const q = searchQuery.toLowerCase();
-    return ASSETS.filter(
-      (a) => a.name.toLowerCase().includes(q) || a.ticker.toLowerCase().includes(q) || a.symbol.toLowerCase().includes(q)
-    ).slice(0, 8);
-  }, [searchQuery]);
-
-  // Fetch chart data — 인터벌 기반 (토스 방식)
-  const loadChart = useCallback(async () => {
+  const loadSummaries = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({
-        type: currentAsset.type,
-        symbol: currentAsset.symbol,
-        interval: chartInterval,
-        subRange: subRange,
-      });
-      const res = await fetch(`/api/market?${params}`);
+      const res = await fetch("/api/global-news?mode=summary");
       const data = await res.json();
-      setChartData(Array.isArray(data) ? data : []);
-    } catch { setChartData([]); }
+      if (Array.isArray(data)) {
+        setCountries(data);
+      }
+    } catch {
+      console.error("Failed to load country summaries");
+    }
     setLoading(false);
-  }, [currentAsset, chartInterval, subRange]);
+  }, []);
 
-  useEffect(() => { loadChart(); }, [loadChart]);
-
-  // Fetch memos from DB
-  const loadMemos = useCallback(async () => {
-    setMemosLoading(true);
-    const raw = await fetchMemos(currentAsset.symbol);
-
-    // Fetch user likes/bookmarks in parallel
-    let likesSet = new Set<string>();
-    let bookmarksSet = new Set<string>();
-    if (user) {
-      const [likes, bookmarks] = await Promise.all([
-        getUserLikes(user.id),
-        getUserBookmarks(user.id),
-      ]);
-      likesSet = likes;
-      bookmarksSet = bookmarks;
-      setUserLikes(likesSet);
-      setUserBookmarks(bookmarksSet);
-    }
-
-    const items: MemoItem[] = await Promise.all(
-      raw.map(async (m: any) => {
-        const profile = m.profiles || {};
-        const commentsRaw = await fetchComments(m.id);
-        return {
-          id: m.id,
-          author: {
-            username: profile.username || null,
-            displayName: profile.display_name || null,
-            image: profile.avatar_url || null,
-          },
-          pinPrice: m.pin_price || 0,
-          pinTimestamp: m.pin_timestamp || new Date(m.created_at).getTime(),
-          content: m.content,
-          sentiment: m.sentiment || "NEUTRAL",
-          likeCount: 0,
-          commentCount: commentsRaw.length,
-          liked: likesSet.has(m.id),
-          bookmarked: bookmarksSet.has(m.id),
-          asset: m.asset_symbol,
-          comments: commentsRaw.map((c: any) => ({
-            author: {
-              username: c.profiles?.username || null,
-              displayName: c.profiles?.display_name || null,
-              image: c.profiles?.avatar_url || null,
-            },
-            content: c.content,
-          })),
-        };
-      })
-    );
-
-    // Fetch like counts for each memo
-    const countsPromises = items.map(async (item) => {
-      const { count } = await supabase
-        .from("likes")
-        .select("*", { count: "exact", head: true })
-        .eq("memo_id", item.id);
-      return { ...item, likeCount: count || 0 };
-    });
-    const itemsWithCounts = await Promise.all(countsPromises);
-
-    setMemos(itemsWithCounts);
-    setMemosLoading(false);
-  }, [currentAsset.symbol, user]);
-
-  useEffect(() => { loadMemos(); }, [loadMemos]);
-
-  // Price info
-  const priceInfo = useMemo(() => {
-    if (!chartData.length) return { price: 0, change: 0, pct: 0 };
-    const last = chartData[chartData.length - 1].value;
-    const first = chartData[0].value;
-    return { price: last, change: last - first, pct: (last - first) / first * 100 };
-  }, [chartData]);
-
-  const currencyLabel = "USD";
-
-  // Pins for chart
-  const chartPins = useMemo(
-    () => memos.map((m) => ({
-      time: Math.floor(m.pinTimestamp / 1000),
-      sentiment: m.sentiment,
-      username: m.author.username || "",
-    })),
-    [memos]
-  );
-
-  // ─── Handlers ───
-
-  const handleSaveMemo = async (data: any) => {
-    if (!user) { router.push("/login"); return; }
-    const result = await createMemo({
-      userId: user.id,
-      assetSymbol: currentAsset.symbol,
-      assetType: currentAsset.type,
-      content: data.content,
-      sentiment: data.sentiment,
-      pinPrice: data.pinPrice,
-      pinTimestamp: data.pinTimestamp,
-    });
-    if (result) {
-      showToast("메모를 작성했어요", "success");
-      loadMemos();
-    }
-  };
-
-  const handleLike = async (id: string) => {
-    if (!user) { router.push("/login"); return; }
-    const liked = await toggleLike(user.id, id);
-    showToast(liked ? "좋아요를 눌렀어요" : "좋아요를 취소했어요", liked ? "like" : "unlike");
-    setUserLikes((prev) => {
-      const next = new Set(prev);
-      if (liked) next.add(id); else next.delete(id);
-      return next;
-    });
-    setMemos((prev) =>
-      prev.map((m) =>
-        m.id === id ? { ...m, liked, likeCount: liked ? m.likeCount + 1 : m.likeCount - 1 } : m
-      )
-    );
-  };
-
-  const handleBookmark = async (id: string) => {
-    if (!user) { router.push("/login"); return; }
-    const bookmarked = await toggleBookmark(user.id, id);
-    showToast(bookmarked ? "북마크에 저장했어요" : "북마크를 해제했어요", bookmarked ? "bookmark" : "unbookmark");
-    setUserBookmarks((prev) => {
-      const next = new Set(prev);
-      if (bookmarked) next.add(id); else next.delete(id);
-      return next;
-    });
-    setMemos((prev) =>
-      prev.map((m) => m.id === id ? { ...m, bookmarked } : m)
-    );
-  };
-
-  const handleComment = async (id: string, text: string) => {
-    if (!user) { router.push("/login"); return; }
-    const result = await createComment(user.id, id, text);
-    if (result) {
-      showToast("댓글을 작성했어요", "comment");
-      loadMemos();
-    }
-  };
-
-  const handleSearchSelect = (asset: typeof ASSETS[0]) => {
-    setAssetType(asset.type);
-    setCurrentAsset(asset);
-    setSearchQuery("");
-    setSearchOpen(false);
-  };
-
-  // 현재 인터벌에 해당하는 하위 기간 옵션
-  const currentSubRanges = SUB_RANGES[chartInterval];
+  useEffect(() => { loadSummaries(); }, [loadSummaries]);
 
   return (
-    <main className="max-w-[960px] mx-auto px-4 md:px-8 pt-6">
-      {/* Header with search */}
-      <div className="flex items-center justify-between mb-5">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-extrabold tracking-tight">
-            Chart<span className="text-accent">y</span>
-          </h1>
-          <span className="hidden sm:block text-xs text-zinc-500">
-            차트 위에 인사이트를 핀하세요
-          </span>
-        </div>
-
-        {/* Search */}
-        <div ref={searchRef} className="relative">
-          <div className="flex items-center bg-surface border border-white/[0.06] rounded-xl px-3 py-2 gap-2 w-[200px] sm:w-[260px] focus-within:border-accent/50 transition-colors">
-            <svg className="w-4 h-4 text-zinc-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" />
-            </svg>
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => { setSearchQuery(e.target.value); setSearchOpen(true); }}
-              onFocus={() => searchQuery && setSearchOpen(true)}
-              className="flex-1 bg-transparent text-sm outline-none placeholder:text-zinc-600"
-              placeholder="종목 검색..."
-            />
-            {searchQuery && (
-              <button onClick={() => { setSearchQuery(""); setSearchOpen(false); }} className="text-zinc-500 hover:text-zinc-300">
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path d="M18 6L6 18M6 6l12 12" />
-                </svg>
-              </button>
-            )}
-          </div>
-
-          {searchOpen && searchResults.length > 0 && (
-            <div className="absolute right-0 top-full mt-1.5 w-[280px] bg-surface-2 border border-white/[0.08] rounded-xl shadow-2xl overflow-hidden z-50">
-              {searchResults.map((a) => (
-                <button key={a.symbol} onClick={() => handleSearchSelect(a)}
-                  className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-white/[0.04] transition-colors">
-                  <div className="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center text-[11px] font-bold text-zinc-400 shrink-0">
-                    {a.ticker.slice(0, 2)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">{a.name}</div>
-                    <div className="text-[11px] text-zinc-500">
-                      {a.ticker} · {a.type === "crypto" ? "암호화폐" : "미국 주식"}
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-          {searchOpen && searchQuery && searchResults.length === 0 && (
-            <div className="absolute right-0 top-full mt-1.5 w-[280px] bg-surface-2 border border-white/[0.08] rounded-xl shadow-2xl p-4 text-center z-50">
-              <div className="text-sm text-zinc-500">검색 결과가 없습니다</div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Asset type tabs */}
-      <div className="flex gap-0.5 bg-surface border border-white/[0.06] rounded-xl p-1 w-fit mb-3">
-        {ASSET_TYPES.map((t) => (
-          <button key={t.key} onClick={() => setAssetType(t.key)}
-            className={`px-4 py-1.5 rounded-lg text-[13px] font-medium transition-all ${
-              assetType === t.key ? "bg-accent text-black font-semibold" : "text-zinc-500 hover:text-zinc-300 hover:bg-surface-2"
-            }`}>
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Asset selector pills */}
-      <div className="flex gap-1 overflow-x-auto pb-1 mb-3 scrollbar-hide">
-        {ASSETS.filter((a) => a.type === assetType).map((a) => (
-          <button key={a.symbol} onClick={() => setCurrentAsset(a)}
-            className={`px-3 py-1 rounded-lg text-xs font-medium transition-all whitespace-nowrap shrink-0 ${
-              currentAsset.symbol === a.symbol ? "bg-accent text-black font-semibold" : "bg-surface text-zinc-500 hover:text-zinc-300 border border-white/[0.06] hover:border-white/10"
-            }`}>
-            {a.ticker}
-          </button>
-        ))}
-      </div>
-
-      {/* 캔들 타입 탭 (토스 방식: 일/주/월/년) + 자세한 차트 토글 */}
-      <div className="flex items-center gap-2 mb-2 flex-wrap">
-        <div className="flex gap-0.5 bg-surface border border-white/[0.06] rounded-xl p-1 w-fit">
-          {INTERVALS.map((iv) => (
-            <button key={iv.key} onClick={() => setChartInterval(iv.key)}
-              className={`px-4 py-1.5 rounded-lg text-[13px] font-medium transition-all ${
-                chartInterval === iv.key ? "bg-accent text-black font-semibold" : "text-zinc-500 hover:text-zinc-300 hover:bg-surface-2"
-              }`}>
-              {iv.label}
-            </button>
-          ))}
-        </div>
-        <button
-          onClick={() => setChartMode(chartMode === "candlestick" ? "line" : "candlestick")}
-          className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-all flex items-center gap-1.5 ${
-            chartMode === "candlestick"
-              ? "bg-accent/10 border-accent/30 text-accent"
-              : "bg-surface border-white/[0.06] text-zinc-500 hover:text-zinc-300 hover:border-white/10"
-          }`}>
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path d="M9 4v4m0 4v8M9 8h.01M9 12h.01M15 4v8m0 4v4M15 12h.01M15 16h.01" />
-          </svg>
-          {chartMode === "candlestick" ? "캔들" : "라인"}
-        </button>
-        <button
-          onClick={() => setDetailedChart(!detailedChart)}
-          className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-all flex items-center gap-1.5 ${
-            detailedChart
-              ? "bg-accent/10 border-accent/30 text-accent"
-              : "bg-surface border-white/[0.06] text-zinc-500 hover:text-zinc-300 hover:border-white/10"
-          }`}>
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path d="M3 3v18h18" /><path d="M7 16l4-8 4 4 5-9" />
-          </svg>
-          이동평균선
-        </button>
-      </div>
-
-      {/* 하위 기간 선택 (1개월, 3개월, 6개월, ...) */}
-      {currentSubRanges.length > 1 && (
-        <div className="flex gap-1 mb-4">
-          {currentSubRanges.map((sr) => (
-            <button key={sr.range} onClick={() => setSubRange(sr.range)}
-              className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all ${
-                subRange === sr.range
-                  ? "bg-zinc-700 text-white font-semibold"
-                  : "text-zinc-500 hover:text-zinc-300 hover:bg-surface-2"
-              }`}>
-              {sr.label}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Price */}
-      <div className="mb-3">
-        <div className="text-[13px] text-zinc-400 font-medium mb-1">
-          {currentAsset.name} ({currentAsset.ticker}) · {currencyLabel}
-        </div>
-        <div className="flex items-baseline gap-3 flex-wrap">
-          <span className="text-[34px] font-extrabold font-mono tracking-tighter leading-none">
-            {crosshair ? formatPrice(crosshair.value) : formatPrice(priceInfo.price)}
-          </span>
-          {!crosshair && priceInfo.change !== 0 && (
-            <span className={`text-sm font-mono font-medium px-2 py-0.5 rounded-md ${
-              priceInfo.change >= 0 ? "text-up bg-up/10" : "text-down bg-down/10"
-            }`}>
-              {priceInfo.change >= 0 ? "+" : ""}{formatPrice(Math.abs(priceInfo.change))} ({priceInfo.change >= 0 ? "+" : ""}{priceInfo.pct.toFixed(2)}%)
+    <main className="h-[100dvh] flex flex-col md:flex-row overflow-hidden">
+      {/* 좌측: 지구본 영역 */}
+      <div className="flex-1 flex flex-col min-h-0">
+        {/* 헤더 */}
+        <div className="px-4 md:px-6 pt-4 pb-2">
+          <div className="flex items-center gap-3 mb-3">
+            <h1 className="text-xl md:text-2xl font-extrabold tracking-tight">
+              <span className="text-accent">Global</span> News Pulse
+            </h1>
+            <span className="hidden sm:block text-xs text-zinc-500 bg-surface border border-white/[0.06] rounded-full px-2.5 py-0.5">
+              실시간 글로벌 뉴스 감성
             </span>
+          </div>
+
+          {/* 국가 빠른 선택 */}
+          <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-hide">
+            {QUICK_SELECT.map((c) => (
+              <button
+                key={c.code}
+                onClick={() => setSelectedCountry(c.code)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all whitespace-nowrap shrink-0 ${
+                  selectedCountry === c.code
+                    ? "bg-accent text-black font-semibold"
+                    : "bg-surface text-zinc-500 hover:text-zinc-300 border border-white/[0.06] hover:border-white/10"
+                }`}
+              >
+                <span>{c.flag}</span>
+                <span>{c.name}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 지구본 */}
+        <div className="flex-1 min-h-0 relative">
+          {loading ? (
+            <div className="w-full h-full flex items-center justify-center">
+              <div className="flex flex-col items-center gap-3">
+                <div className="w-6 h-6 border-2 border-white/10 border-t-accent rounded-full animate-spin" />
+                <span className="text-sm text-zinc-400">글로벌 뉴스 데이터 로딩 중...</span>
+              </div>
+            </div>
+          ) : (
+            <InteractiveGlobe
+              countries={countries}
+              selectedCountry={selectedCountry}
+              onSelectCountry={setSelectedCountry}
+            />
           )}
         </div>
+
+        {/* 하단 국가 감성 요약 (데스크톱) */}
+        <div className="hidden md:block px-6 pb-4">
+          <div className="flex gap-2 overflow-x-auto scrollbar-hide">
+            {countries.filter((c) => c.articleCount > 0).map((c) => (
+              <button
+                key={c.code}
+                onClick={() => setSelectedCountry(c.code)}
+                className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-all shrink-0 ${
+                  selectedCountry === c.code
+                    ? "bg-white/[0.08] border-accent/30"
+                    : "bg-surface border-white/[0.06] hover:border-white/10"
+                }`}
+              >
+                <span className="text-base">{c.flag}</span>
+                <div className="text-left">
+                  <div className="text-[11px] font-medium text-zinc-300">{c.name}</div>
+                  <div className={`text-[10px] font-semibold ${
+                    c.sentiment >= 60 ? "text-emerald-400"
+                    : c.sentiment >= 45 ? "text-blue-400"
+                    : "text-red-400"
+                  }`}>
+                    {c.label} · {c.sentiment}
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
-      {/* Chart */}
-      <div className="relative mb-3">
-        {loading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-surface rounded-2xl z-20 gap-2 text-sm text-zinc-400">
-            <div className="w-4 h-4 border-2 border-white/10 border-t-accent rounded-full animate-spin" />
-            시세 불러오는 중...
+      {/* 우측: 뉴스 패널 */}
+      <div className={`
+        md:w-[380px] lg:w-[420px] bg-surface border-l border-white/[0.06]
+        ${selectedCountry ? "flex-1 md:flex-none" : "hidden md:block"}
+        flex flex-col min-h-0
+      `}>
+        {/* 모바일 뒤로가기 */}
+        {selectedCountry && (
+          <div className="md:hidden flex items-center gap-2 px-4 py-3 border-b border-white/[0.06]">
+            <button
+              onClick={() => setSelectedCountry(null)}
+              className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-zinc-200"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path d="M15 19l-7-7 7-7" />
+              </svg>
+              지구본으로 돌아가기
+            </button>
           </div>
         )}
-        {chartData.length > 0 && (
-          <PriceChart data={chartData} pins={chartPins} chartInterval={chartInterval} />
-        )}
-      </div>
-
-      {/* Valuation Analysis Card */}
-      <div className="mb-3">
-        <ValuationCard symbol={currentAsset.symbol} type={currentAsset.type} assetName={currentAsset.name} />
-      </div>
-
-      {/* Sentiment Analysis Card */}
-      {currentAsset.type === "us_stock" && (
-        <div className="mb-3">
-          <SentimentCard symbol={currentAsset.symbol} assetName={currentAsset.name} />
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <NewsPanel countryCode={selectedCountry} />
         </div>
-      )}
-
-      {/* Pin bar */}
-      <div className="flex items-center gap-3 bg-surface border border-white/[0.06] rounded-xl px-4 py-2.5 mb-6 min-h-[46px]">
-        <div className={`flex-1 text-[13px] font-mono ${pinPoint ? "text-zinc-200" : "text-zinc-600"}`}>
-          {pinPoint ? `📌 ${formatDate(pinPoint.time * 1000)}  ${formatPrice(pinPoint.value)}` : "차트를 클릭하여 핀 위치를 선택하세요"}
-        </div>
-        <button
-          onClick={() => { if (!user) { router.push("/login"); return; } openMemoModal(); }}
-          className={`bg-accent text-black rounded-lg px-4 py-2 text-[13px] font-bold transition-all ${
-            pinPoint ? "opacity-100 translate-y-0" : "opacity-0 pointer-events-none translate-y-0.5"
-          }`}>
-          + 메모 추가
-        </button>
       </div>
-
-      {/* Feed */}
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-base font-bold">커뮤니티 메모</h2>
-        {memos.length > 0 && (
-          <span className="text-xs text-zinc-500 bg-surface-2 px-2 py-0.5 rounded-full">{memos.length}개</span>
-        )}
-      </div>
-
-      {memos.length === 0 && !memosLoading ? (
-        <div className="border border-dashed border-white/10 rounded-2xl py-10 text-center">
-          <div className="text-3xl mb-2">📌</div>
-          <div className="text-sm font-semibold mb-1">아직 메모가 없어요</div>
-          <div className="text-xs text-zinc-500">차트를 클릭하고 첫 번째 인사이트를 핀해보세요</div>
-        </div>
-      ) : (
-        memos.map((m) => (
-          <MemoCard key={m.id} memo={m} onLike={handleLike} onBookmark={handleBookmark} onComment={handleComment} />
-        ))
-      )}
-
-      <MemoCreateModal onSave={handleSaveMemo} />
     </main>
   );
 }
