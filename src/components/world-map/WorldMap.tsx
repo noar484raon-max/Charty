@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { getContinentSVGPaths } from "./continent-paths";
+import { getWorldMapPath } from "./continent-paths";
 
 export interface MapCountry {
   code: string;
@@ -36,7 +36,7 @@ function sentimentColor(s: number): string {
 
 export default function WorldMap({ countries, selectedCountry, onSelectCountry }: WorldMapProps) {
   const [hovered, setHovered] = useState<string | null>(null);
-  const continents = useMemo(() => getContinentSVGPaths(), []);
+  const landPath = useMemo(() => getWorldMapPath(), []);
 
   return (
     <div className="relative w-full h-full">
@@ -67,16 +67,15 @@ export default function WorldMap({ countries, selectedCountry, onSelectCountry }
             stroke="#141c2e" strokeWidth="0.5" strokeDasharray="2,6" />;
         })}
 
-        {/* ★ 대륙 윤곽선 ★ */}
-        {continents.map((c) => (
-          <path key={c.name} d={c.d}
-            fill="#0d1f2d"
-            stroke="#1b4a5a"
-            strokeWidth="1.2"
-            strokeLinejoin="round"
-            opacity="0.9"
-          />
-        ))}
+        {/* ★ 대륙 윤곽선 (Natural Earth 110m) ★ */}
+        <path
+          d={landPath}
+          fill="#0d2137"
+          stroke="#1b5a6a"
+          strokeWidth="0.8"
+          strokeLinejoin="round"
+          opacity="0.95"
+        />
 
         {/* 국가 마커 */}
         {countries.map((c) => {
