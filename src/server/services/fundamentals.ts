@@ -1,13 +1,12 @@
 // ─── Yahoo Finance Fundamentals Service ───
-// crumb 인증 방식으로 PER, PBR, PSR, 시가총액, 52주 범위 등 재무 데이터 조회
+// 여러 방법으로 PER, PBR, PSR, 시가총액 등 재무 데이터 조회
 
 type CacheEntry = { data: any; ts: number };
 const fCache = new Map<string, CacheEntry>();
 const CACHE_TTL = 10 * 60_000; // 10분
 
-// crumb/cookie 캐시
 let crumbCache: { crumb: string; cookie: string; ts: number } | null = null;
-const CRUMB_TTL = 30 * 60_000; // 30분
+const CRUMB_TTL = 30 * 60_000;
 
 function getCached(key: string): any | null {
   const entry = fCache.get(key);
@@ -23,8 +22,6 @@ function setCache(key: string, data: any) {
   }
 }
 
-// ─── 심볼 변환 ───
-
 function toYahooSymbol(symbol: string, type: "us_stock" | "crypto"): string {
   if (type === "crypto") {
     const CRYPTO_MAP: Record<string, string> = {
@@ -38,8 +35,6 @@ function toYahooSymbol(symbol: string, type: "us_stock" | "crypto"): string {
   return symbol;
 }
 
-// ─── 섹터 평균 PER ───
-
 const SECTOR_AVG_PER: Record<string, number> = {
   Technology: 30, "Financial Services": 14, Healthcare: 22,
   "Consumer Cyclical": 25, "Consumer Defensive": 22,
@@ -47,8 +42,6 @@ const SECTOR_AVG_PER: Record<string, number> = {
   Energy: 12, Utilities: 16, "Real Estate": 35,
   "Basic Materials": 15, Crypto: 0,
 };
-
-// ─── 밸류에이션 판단 ───
 
 export type ValuationLevel = "저평가" | "적정" | "고평가" | "N/A";
 
@@ -113,46 +106,143 @@ function overallAssessment(pe: ValuationLevel, pb: ValuationLevel, ps: Valuation
   return "고평가";
 }
 
-// ─── Yahoo Finance Crumb 인증 ───
+const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+// ─── 방법 1: Yahoo Finance 페이지에서 JSON 추출 ───
+
+async function fetchFromYahooPage(yahooSymbol: string): Promise<any> {
+  try {
+    const url = `https://finance.yahoo.com/quote/${encodeURIComponent(yahooSymbol)}/`;
+    const r = await fetch(url, {
+      headers: {
+        "User-Agent": UA,
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    });
+    if (!r.ok) return null;
+    const html = await r.text();
+
+    // 방법 A: __NEXT_DATA__ 에서 추출
+    const nextDataMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+    if (nextDataMatch) {
+      try {
+        const nextData = JSON.parse(nextDataMatch[1]);
+        // Next.js 구조에서 quote 데이터 찾기
+        const pageProps = nextData?.props?.pageProps;
+        if (pageProps) {
+          // 다양한 경로에서 데이터 탐색
+          const quoteSummary = pageProps?.quoteSummary?.result?.[0];
+          if (quoteSummary) return { _source: "nextdata_summary", ...quoteSummary };
+
+          const quoteData = pageProps?.quote;
+          if (quoteData) return { _source: "nextdata_quote", ...quoteData };
+        }
+      } catch { /* parse error, try next method */ }
+    }
+
+    // 방법 B: root.App.main 에서 추출 (이전 Yahoo Finance 버전)
+    const appMainMatch = html.match(/root\.App\.main\s*=\s*({[\s\S]*?});\s*\n/);
+    if (appMainMatch) {
+      try {
+        const appData = JSON.parse(appMainMatch[1]);
+        const stores = appData?.context?.dispatcher?.stores;
+        const quoteSummaryStore = stores?.QuoteSummaryStore;
+        if (quoteSummaryStore) return { _source: "appmain", ...quoteSummaryStore };
+      } catch { /* parse error */ }
+    }
+
+    // 방법 C: JSON-LD 에서 기본 정보 추출
+    const jsonLdMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+    if (jsonLdMatch) {
+      try {
+        const ld = JSON.parse(jsonLdMatch[1]);
+        if (ld?.mainEntity) return { _source: "jsonld", ...ld.mainEntity };
+      } catch { /* ignore */ }
+    }
+
+    return null;
+  } catch (e) {
+    console.warn("Yahoo page fetch failed:", e);
+    return null;
+  }
+}
+
+// ─── 방법 2: Crumb 인증으로 API 호출 ───
+
+function extractCookies(response: Response): string {
+  const cookies: string[] = [];
+  // 방법 A: getSetCookie (Node 20+)
+  try {
+    const setCookies = (response.headers as any).getSetCookie?.();
+    if (setCookies && setCookies.length > 0) {
+      for (const c of setCookies) {
+        cookies.push(c.split(";")[0]);
+      }
+      return cookies.join("; ");
+    }
+  } catch { /* not available */ }
+
+  // 방법 B: raw headers에서 추출
+  try {
+    const raw = (response.headers as any).raw?.();
+    if (raw?.["set-cookie"]) {
+      for (const c of raw["set-cookie"]) {
+        cookies.push(c.split(";")[0]);
+      }
+      return cookies.join("; ");
+    }
+  } catch { /* not available */ }
+
+  // 방법 C: get('set-cookie') 파싱
+  const setCookie = response.headers.get("set-cookie");
+  if (setCookie) {
+    // 여러 쿠키가 , 로 구분될 수 있음
+    const parts = setCookie.split(/,(?=[^ ])/);
+    for (const part of parts) {
+      cookies.push(part.trim().split(";")[0]);
+    }
+    return cookies.join("; ");
+  }
+
+  return "";
+}
 
 async function getYahooCrumb(): Promise<{ crumb: string; cookie: string } | null> {
-  // 캐시된 crumb이 있으면 재사용
   if (crumbCache && Date.now() - crumbCache.ts < CRUMB_TTL) {
     return { crumb: crumbCache.crumb, cookie: crumbCache.cookie };
   }
 
   try {
-    // 1단계: Yahoo에서 쿠키 받기
+    // Step 1: Yahoo consent 페이지로 쿠키 받기
     const initRes = await fetch("https://fc.yahoo.com/", {
       redirect: "manual",
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      },
+      headers: { "User-Agent": UA },
     });
+    let cookieStr = extractCookies(initRes);
 
-    const setCookies = initRes.headers.getSetCookie?.() || [];
-    const cookieStr = setCookies.map(c => c.split(";")[0]).join("; ");
+    // Step 1b: 쿠키가 없으면 finance.yahoo.com에서 시도
+    if (!cookieStr) {
+      const altRes = await fetch("https://finance.yahoo.com/", {
+        redirect: "manual",
+        headers: { "User-Agent": UA },
+      });
+      cookieStr = extractCookies(altRes);
+    }
 
     if (!cookieStr) {
-      console.warn("No cookies from Yahoo");
+      console.warn("No cookies obtained from Yahoo");
       return null;
     }
 
-    // 2단계: crumb 받기
+    // Step 2: crumb 받기
     const crumbRes = await fetch("https://query2.finance.yahoo.com/v1/test/getcrumb", {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Cookie": cookieStr,
-      },
+      headers: { "User-Agent": UA, "Cookie": cookieStr },
     });
-
-    if (!crumbRes.ok) {
-      console.warn("Failed to get crumb:", crumbRes.status);
-      return null;
-    }
+    if (!crumbRes.ok) return null;
 
     const crumb = await crumbRes.text();
-    if (!crumb || crumb.length > 50) return null;
+    if (!crumb || crumb.length > 50 || crumb.includes("<")) return null;
 
     crumbCache = { crumb, cookie: cookieStr, ts: Date.now() };
     return { crumb, cookie: cookieStr };
@@ -162,8 +252,6 @@ async function getYahooCrumb(): Promise<{ crumb: string; cookie: string } | null
   }
 }
 
-// ─── Yahoo Finance quoteSummary with crumb ───
-
 async function fetchWithCrumb(yahooSymbol: string, modules: string): Promise<any> {
   const auth = await getYahooCrumb();
   if (!auth) return null;
@@ -171,55 +259,118 @@ async function fetchWithCrumb(yahooSymbol: string, modules: string): Promise<any
   const url = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(yahooSymbol)}?modules=${modules}&crumb=${encodeURIComponent(auth.crumb)}`;
 
   const r = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Cookie": auth.cookie,
-    },
+    headers: { "User-Agent": UA, "Cookie": auth.cookie },
   });
 
-  if (!r.ok) {
-    // crumb이 만료되었을 수 있음 → 리셋 후 재시도
-    if (r.status === 401 || r.status === 403) {
-      crumbCache = null;
-      const auth2 = await getYahooCrumb();
-      if (!auth2) return null;
-
-      const r2 = await fetch(
-        `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(yahooSymbol)}?modules=${modules}&crumb=${encodeURIComponent(auth2.crumb)}`,
-        {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            "Cookie": auth2.cookie,
-          },
-        }
-      );
-      if (!r2.ok) return null;
-      const d2 = await r2.json();
-      return d2?.quoteSummary?.result?.[0] ?? null;
-    }
-    return null;
+  if (r.status === 401 || r.status === 403) {
+    crumbCache = null;
+    const auth2 = await getYahooCrumb();
+    if (!auth2) return null;
+    const r2 = await fetch(
+      `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(yahooSymbol)}?modules=${modules}&crumb=${encodeURIComponent(auth2.crumb)}`,
+      { headers: { "User-Agent": UA, "Cookie": auth2.cookie } }
+    );
+    if (!r2.ok) return null;
+    const d2 = await r2.json();
+    return d2?.quoteSummary?.result?.[0] ?? null;
   }
 
+  if (!r.ok) return null;
   const d = await r.json();
   return d?.quoteSummary?.result?.[0] ?? null;
 }
 
-// ─── Fallback: v8 chart meta ───
+// ─── 방법 3: v8 chart meta (기본 정보만) ───
 
 async function fetchChartMeta(yahooSymbol: string): Promise<any> {
   try {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?range=5d&interval=1d`;
-    const r = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-      },
-    });
+    const r = await fetch(url, { headers: { "User-Agent": UA } });
     if (!r.ok) return null;
     const d = await r.json();
     return d?.chart?.result?.[0]?.meta ?? null;
-  } catch {
-    return null;
+  } catch { return null; }
+}
+
+// ─── quoteSummary 결과 파싱 ───
+
+function parseQuoteSummary(result: any): {
+  currentPrice: number | null; high52: number | null; low52: number | null;
+  trailingPE: number | null; forwardPE: number | null; pb: number | null;
+  ps: number | null; evEbitda: number | null; marketCap: number | null;
+  sector: string | null; industry: string | null; profitMargin: number | null;
+  roe: number | null; revGrowth: number | null; earnGrowth: number | null;
+  divYield: number | null; eps: number | null; bookVal: number | null;
+} {
+  const price = result.price || {};
+  const summary = result.summaryDetail || {};
+  const keyStats = result.defaultKeyStatistics || {};
+  const financial = result.financialData || {};
+  const profile = result.summaryProfile || {};
+
+  return {
+    currentPrice: price.regularMarketPrice?.raw ?? null,
+    high52: summary.fiftyTwoWeekHigh?.raw ?? null,
+    low52: summary.fiftyTwoWeekLow?.raw ?? null,
+    trailingPE: summary.trailingPE?.raw ?? keyStats.trailingPE?.raw ?? null,
+    forwardPE: keyStats.forwardPE?.raw ?? summary.forwardPE?.raw ?? null,
+    pb: keyStats.priceToBook?.raw ?? null,
+    ps: keyStats.priceToSalesTrailing12Months?.raw ?? summary.priceToSalesTrailing12Months?.raw ?? null,
+    evEbitda: keyStats.enterpriseToEbitda?.raw ?? null,
+    marketCap: price.marketCap?.raw ?? null,
+    sector: profile.sector ?? null,
+    industry: profile.industry ?? null,
+    profitMargin: financial.profitMargins?.raw ?? null,
+    roe: financial.returnOnEquity?.raw ?? null,
+    revGrowth: financial.revenueGrowth?.raw ?? null,
+    earnGrowth: financial.earningsGrowth?.raw ?? null,
+    divYield: summary.dividendYield?.raw ?? null,
+    eps: keyStats.trailingEps?.raw ?? null,
+    bookVal: keyStats.bookValue?.raw ?? null,
+  };
+}
+
+// ─── Yahoo 페이지 데이터 파싱 ───
+
+function parseYahooPageData(data: any): {
+  currentPrice: number | null; high52: number | null; low52: number | null;
+  trailingPE: number | null; forwardPE: number | null; pb: number | null;
+  ps: number | null; evEbitda: number | null; marketCap: number | null;
+  sector: string | null; industry: string | null; profitMargin: number | null;
+  roe: number | null; revGrowth: number | null; earnGrowth: number | null;
+  divYield: number | null; eps: number | null; bookVal: number | null;
+} {
+  const src = data._source;
+
+  if (src === "nextdata_summary") {
+    return parseQuoteSummary(data);
   }
+
+  if (src === "appmain") {
+    return parseQuoteSummary(data);
+  }
+
+  // nextdata_quote 또는 기타 flat 구조
+  return {
+    currentPrice: data.regularMarketPrice?.raw ?? data.regularMarketPrice ?? null,
+    high52: data.fiftyTwoWeekHigh?.raw ?? data.fiftyTwoWeekHigh ?? null,
+    low52: data.fiftyTwoWeekLow?.raw ?? data.fiftyTwoWeekLow ?? null,
+    trailingPE: data.trailingPE?.raw ?? data.trailingPE ?? null,
+    forwardPE: data.forwardPE?.raw ?? data.forwardPE ?? null,
+    pb: data.priceToBook?.raw ?? data.priceToBook ?? null,
+    ps: data.priceToSalesTrailing12Months?.raw ?? data.priceToSalesTrailing12Months ?? null,
+    evEbitda: data.enterpriseToEbitda?.raw ?? data.enterpriseToEbitda ?? null,
+    marketCap: data.marketCap?.raw ?? data.marketCap ?? null,
+    sector: data.sector ?? null,
+    industry: data.industry ?? null,
+    profitMargin: data.profitMargins?.raw ?? data.profitMargins ?? null,
+    roe: data.returnOnEquity?.raw ?? data.returnOnEquity ?? null,
+    revGrowth: data.revenueGrowth?.raw ?? data.revenueGrowth ?? null,
+    earnGrowth: data.earningsGrowth?.raw ?? data.earningsGrowth ?? null,
+    divYield: data.dividendYield?.raw ?? data.trailingAnnualDividendYield?.raw ?? data.dividendYield ?? null,
+    eps: data.epsTrailingTwelveMonths?.raw ?? data.trailingEps?.raw ?? data.epsTrailingTwelveMonths ?? null,
+    bookVal: data.bookValue?.raw ?? data.bookValue ?? null,
+  };
 }
 
 // ─── 메인 함수 ───
@@ -247,101 +398,98 @@ export async function fetchFundamentals(
   };
 
   try {
-    // 방법 1: crumb 인증으로 quoteSummary 호출
+    let parsed: ReturnType<typeof parseQuoteSummary> | null = null;
+
+    // 시도 1: crumb 인증 API
     const modules = isCrypto
       ? "price,summaryDetail"
       : "price,summaryDetail,defaultKeyStatistics,financialData,summaryProfile";
 
-    let result = await fetchWithCrumb(yahooSymbol, modules);
-
-    // 방법 2: chart meta fallback
-    if (!result) {
-      const meta = await fetchChartMeta(yahooSymbol);
-      if (meta) {
-        const currentPrice = meta.regularMarketPrice ?? null;
-        const high52 = meta.fiftyTwoWeekHigh ?? null;
-        const low52 = meta.fiftyTwoWeekLow ?? null;
-        let pos52: number | null = null;
-        if (currentPrice && high52 && low52 && high52 !== low52) {
-          pos52 = Math.round(((currentPrice - low52) / (high52 - low52)) * 100);
-        }
-        const partialData: FundamentalData = {
-          ...emptyResult,
-          currentPrice,
-          fiftyTwoWeekHigh: high52,
-          fiftyTwoWeekLow: low52,
-          fiftyTwoWeekRange: high52 && low52 ? `$${low52.toLocaleString()} – $${high52.toLocaleString()}` : null,
-          fiftyTwoWeekPosition: pos52,
-        };
-        setCache(cacheKey, partialData);
-        return partialData;
-      }
-      return emptyResult;
+    const apiResult = await fetchWithCrumb(yahooSymbol, modules);
+    if (apiResult) {
+      parsed = parseQuoteSummary(apiResult);
+      console.log(`[Fundamentals] ${yahooSymbol}: crumb API success`);
     }
 
-    // quoteSummary 데이터 파싱
-    const price = result.price || {};
-    const summary = result.summaryDetail || {};
-    const keyStats = result.defaultKeyStatistics || {};
-    const financial = result.financialData || {};
-    const profile = result.summaryProfile || {};
+    // 시도 2: Yahoo Finance 페이지 스크래핑
+    if (!parsed || parsed.trailingPE == null) {
+      const pageData = await fetchFromYahooPage(yahooSymbol);
+      if (pageData) {
+        const pageParsed = parseYahooPageData(pageData);
+        // 더 많은 데이터가 있으면 교체
+        if (pageParsed.trailingPE != null || pageParsed.marketCap != null) {
+          parsed = pageParsed;
+          console.log(`[Fundamentals] ${yahooSymbol}: page scrape success (${pageData._source})`);
+        } else if (!parsed) {
+          parsed = pageParsed;
+        }
+      }
+    }
 
-    const currentPrice = price.regularMarketPrice?.raw ?? null;
-    const high52 = summary.fiftyTwoWeekHigh?.raw ?? null;
-    const low52 = summary.fiftyTwoWeekLow?.raw ?? null;
-    const trailingPE = summary.trailingPE?.raw ?? keyStats.trailingPE?.raw ?? null;
-    const forwardPE = keyStats.forwardPE?.raw ?? summary.forwardPE?.raw ?? null;
-    const pb = keyStats.priceToBook?.raw ?? null;
-    const ps = keyStats.priceToSalesTrailing12Months?.raw ?? summary.priceToSalesTrailing12Months?.raw ?? null;
-    const evEbitda = keyStats.enterpriseToEbitda?.raw ?? null;
-    const marketCap = price.marketCap?.raw ?? null;
-    const sector = profile.sector ?? null;
-    const industry = profile.industry ?? null;
-    const profitMargin = financial.profitMargins?.raw ?? null;
-    const roe = financial.returnOnEquity?.raw ?? null;
-    const revGrowth = financial.revenueGrowth?.raw ?? null;
-    const earnGrowth = financial.earningsGrowth?.raw ?? null;
-    const divYield = summary.dividendYield?.raw ?? null;
-    const eps = keyStats.trailingEps?.raw ?? null;
-    const bookVal = keyStats.bookValue?.raw ?? null;
+    // 시도 3: chart meta fallback (52주 범위만)
+    if (!parsed || (parsed.currentPrice == null && parsed.high52 == null)) {
+      const meta = await fetchChartMeta(yahooSymbol);
+      if (meta) {
+        console.log(`[Fundamentals] ${yahooSymbol}: chart meta fallback`);
+        if (!parsed) {
+          parsed = {
+            currentPrice: meta.regularMarketPrice ?? null,
+            high52: meta.fiftyTwoWeekHigh ?? null,
+            low52: meta.fiftyTwoWeekLow ?? null,
+            trailingPE: null, forwardPE: null, pb: null, ps: null,
+            evEbitda: null, marketCap: null, sector: null, industry: null,
+            profitMargin: null, roe: null, revGrowth: null, earnGrowth: null,
+            divYield: null, eps: null, bookVal: null,
+          };
+        } else {
+          // 부족한 데이터 보충
+          if (!parsed.currentPrice) parsed.currentPrice = meta.regularMarketPrice ?? null;
+          if (!parsed.high52) parsed.high52 = meta.fiftyTwoWeekHigh ?? null;
+          if (!parsed.low52) parsed.low52 = meta.fiftyTwoWeekLow ?? null;
+        }
+      }
+    }
 
-    const peVal = assessPE(trailingPE, isCrypto ? "Crypto" : sector);
-    const pbVal = assessPB(pb);
-    const psVal = assessPS(ps);
+    if (!parsed) return emptyResult;
+
+    const peVal = assessPE(parsed.trailingPE, isCrypto ? "Crypto" : parsed.sector);
+    const pbVal = assessPB(parsed.pb);
+    const psVal = assessPS(parsed.ps);
 
     let pos52: number | null = null;
-    if (currentPrice != null && high52 != null && low52 != null && high52 !== low52) {
-      pos52 = Math.round(((currentPrice - low52) / (high52 - low52)) * 100);
+    if (parsed.currentPrice != null && parsed.high52 != null && parsed.low52 != null && parsed.high52 !== parsed.low52) {
+      pos52 = Math.round(((parsed.currentPrice - parsed.low52) / (parsed.high52 - parsed.low52)) * 100);
     }
 
     const round2 = (v: number | null) => v != null ? parseFloat(v.toFixed(2)) : null;
 
     const data: FundamentalData = {
-      currentPrice,
-      fiftyTwoWeekHigh: high52,
-      fiftyTwoWeekLow: low52,
-      fiftyTwoWeekRange: high52 != null && low52 != null ? `$${low52.toLocaleString()} – $${high52.toLocaleString()}` : null,
-      trailingPE: round2(trailingPE),
-      forwardPE: round2(forwardPE),
-      priceToBook: round2(pb),
-      priceToSales: round2(ps),
-      enterpriseToEbitda: round2(evEbitda),
-      marketCap,
-      sector,
-      industry,
-      profitMargin,
-      returnOnEquity: roe,
-      revenueGrowth: revGrowth,
-      earningsGrowth: earnGrowth,
-      dividendYield: divYield,
+      currentPrice: parsed.currentPrice,
+      fiftyTwoWeekHigh: parsed.high52,
+      fiftyTwoWeekLow: parsed.low52,
+      fiftyTwoWeekRange: parsed.high52 != null && parsed.low52 != null
+        ? `$${parsed.low52.toLocaleString()} – $${parsed.high52.toLocaleString()}` : null,
+      trailingPE: round2(parsed.trailingPE),
+      forwardPE: round2(parsed.forwardPE),
+      priceToBook: round2(parsed.pb),
+      priceToSales: round2(parsed.ps),
+      enterpriseToEbitda: round2(parsed.evEbitda),
+      marketCap: parsed.marketCap,
+      sector: parsed.sector,
+      industry: parsed.industry,
+      profitMargin: parsed.profitMargin,
+      returnOnEquity: parsed.roe,
+      revenueGrowth: parsed.revGrowth,
+      earningsGrowth: parsed.earnGrowth,
+      dividendYield: parsed.divYield,
       peValuation: peVal,
       pbValuation: pbVal,
       psValuation: psVal,
       overallValuation: overallAssessment(peVal, pbVal, psVal),
       fiftyTwoWeekPosition: pos52,
       isCrypto,
-      epsTrailing: round2(eps),
-      bookValue: round2(bookVal),
+      epsTrailing: round2(parsed.eps),
+      bookValue: round2(parsed.bookVal),
       averageVolume: null,
     };
 
