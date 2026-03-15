@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { getLandDots } from "./land-dots";
+import { getContinentSVGPaths } from "./continent-paths";
 
 export interface MapCountry {
   code: string;
@@ -36,13 +36,13 @@ function sentimentColor(s: number): string {
 
 export default function WorldMap({ countries, selectedCountry, onSelectCountry }: WorldMapProps) {
   const [hovered, setHovered] = useState<string | null>(null);
-  const landDots = useMemo(() => getLandDots(), []);
+  const continents = useMemo(() => getContinentSVGPaths(), []);
 
   return (
     <div className="relative w-full h-full">
       <svg viewBox="0 0 1000 700" className="w-full h-full" preserveAspectRatio="xMidYMid meet">
         <defs>
-          <radialGradient id="mapBg" cx="50%" cy="45%" r="55%">
+          <radialGradient id="mapBg" cx="50%" cy="45%" r="60%">
             <stop offset="0%" stopColor="#0e1525" />
             <stop offset="100%" stopColor="#060a14" />
           </radialGradient>
@@ -52,52 +52,31 @@ export default function WorldMap({ countries, selectedCountry, onSelectCountry }
           </filter>
         </defs>
 
-        {/* 배경 */}
         <rect width="1000" height="700" fill="url(#mapBg)" />
 
         {/* 위도 그리드 */}
         {[-60, -30, 0, 30, 60].map((lat) => {
           const [, y] = project(lat, 0);
-          return <line key={`la${lat}`} x1="30" y1={y} x2="970" y2={y}
-            stroke="#1a2035" strokeWidth="0.5" strokeDasharray="4,8" />;
+          return <line key={`la${lat}`} x1="20" y1={y} x2="980" y2={y}
+            stroke="#141c2e" strokeWidth="0.5" strokeDasharray="2,6" />;
         })}
         {/* 경도 그리드 */}
         {[-150,-120,-90,-60,-30,0,30,60,90,120,150].map((lng) => {
           const [x] = project(0, lng);
-          return <line key={`lo${lng}`} x1={x} y1="30" x2={x} y2="670"
-            stroke="#1a2035" strokeWidth="0.5" strokeDasharray="4,8" />;
+          return <line key={`lo${lng}`} x1={x} y1="20" x2={x} y2="680"
+            stroke="#141c2e" strokeWidth="0.5" strokeDasharray="2,6" />;
         })}
 
-        {/* ★ 도트 매트릭스 대륙 ★ */}
-        {landDots.map((d, i) => (
-          <circle key={i} cx={d.x} cy={d.y} r="1.8"
-            fill="#1a5c4a" opacity="0.55" />
+        {/* ★ 대륙 윤곽선 ★ */}
+        {continents.map((c) => (
+          <path key={c.name} d={c.d}
+            fill="#0d1f2d"
+            stroke="#1b4a5a"
+            strokeWidth="1.2"
+            strokeLinejoin="round"
+            opacity="0.9"
+          />
         ))}
-
-        {/* 적도 강조 */}
-        {(() => {
-          const [, y] = project(0, 0);
-          return <line x1="30" y1={y} x2="970" y2={y}
-            stroke="#2a5060" strokeWidth="0.8" strokeDasharray="6,4" />;
-        })()}
-
-        {/* 지역 라벨 */}
-        {[
-          { l: "NORTH AMERICA", lat: 52, lng: -105 },
-          { l: "SOUTH AMERICA", lat: -30, lng: -58 },
-          { l: "EUROPE", lat: 56, lng: 15 },
-          { l: "AFRICA", lat: 5, lng: 22 },
-          { l: "ASIA", lat: 48, lng: 85 },
-          { l: "OCEANIA", lat: -22, lng: 140 },
-        ].map((r) => {
-          const [x, y] = project(r.lat, r.lng);
-          return (
-            <text key={r.l} x={x} y={y} textAnchor="middle" fontSize="10"
-              fill="#1e3548" fontFamily="system-ui" fontWeight="700" letterSpacing="3">
-              {r.l}
-            </text>
-          );
-        })}
 
         {/* 국가 마커 */}
         {countries.map((c) => {
@@ -115,7 +94,6 @@ export default function WorldMap({ countries, selectedCountry, onSelectCountry }
               onMouseLeave={() => setHovered(null)}
               className="cursor-pointer"
             >
-              {/* 펄스 */}
               {(hasNews || sel) && (
                 <>
                   <circle cx={x} cy={y} r={r} fill="none" stroke={col} strokeWidth="1" opacity="0">
@@ -128,24 +106,17 @@ export default function WorldMap({ countries, selectedCountry, onSelectCountry }
                   </circle>
                 </>
               )}
-
-              {/* 글로우 */}
-              <circle cx={x} cy={y} r={r * 2} fill={col} opacity="0.08" filter="url(#glow)" />
-
-              {/* 메인 도트 */}
+              <circle cx={x} cy={y} r={r * 2} fill={col} opacity="0.06" filter="url(#glow)" />
               <circle cx={x} cy={y} r={r} fill={col}
                 stroke={sel ? "#fff" : hov ? "#ffffff60" : "none"}
                 strokeWidth={sel ? 2.5 : hov ? 1.5 : 0}
                 opacity={sel ? 1 : hasNews ? 0.85 : 0.4}
               />
-
-              {/* 라벨 */}
               {(hov || sel) && (
                 <g>
-                  <rect x={x - 50} y={y - r - 32}
-                    width={100} height="28" rx="6"
+                  <rect x={x - 55} y={y - r - 34} width={110} height="30" rx="6"
                     fill="#141b2d" stroke="#2a3550" strokeWidth="1" opacity="0.95" />
-                  <text x={x} y={y - r - 18} textAnchor="middle"
+                  <text x={x} y={y - r - 19} textAnchor="middle"
                     fontSize="11" fill="#e4e4e7" fontWeight="700" fontFamily="system-ui">
                     {c.flag} {c.name}
                   </text>
@@ -160,7 +131,6 @@ export default function WorldMap({ countries, selectedCountry, onSelectCountry }
         })}
       </svg>
 
-      {/* 범례 */}
       <div className="absolute bottom-3 right-3 bg-surface/80 backdrop-blur-sm border border-white/[0.06] rounded-lg px-2.5 py-2 text-[10px]">
         <div className="flex items-center gap-1.5 mb-1">
           <span className="w-2 h-2 rounded-full bg-emerald-500" /><span className="text-zinc-400">긍정</span>
