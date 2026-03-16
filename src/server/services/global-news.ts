@@ -2,6 +2,11 @@
  * Global News Service — NewsAPI.org 기반 글로벌 뉴스
  * 12개 지역: 미국, 캐나다, 남미, 오세아니아, 동남아, 한국, 일본, 러시아, 중국, 중동, EU, 아프리카
  * 무료 플랜: 100 req/day, 30분 서버 캐시
+ *
+ * 최적화 전략:
+ * - 초기 요약: category 없이 top-headlines 1회 호출 (병렬, 6개 지역)
+ * - 상세 보기: business → general → everything 3단계 폴백
+ * - 30분 캐시로 API 호출 최소화
  */
 
 const NEWSAPI_KEY = process.env.NEWSAPI_KEY || "";
@@ -9,14 +14,14 @@ const NEWSAPI_KEY = process.env.NEWSAPI_KEY || "";
 // ─── 12개 지역 정의 ───
 
 export interface RegionInfo {
-  code: string;           // 고유 지역 코드
-  name: string;           // 한국어 이름
-  nameEn: string;         // 영어 이름
-  lat: number;            // 지도 마커 위치
+  code: string;
+  name: string;
+  nameEn: string;
+  lat: number;
   lng: number;
-  flag: string;           // 이모지
-  apiCountry: string;     // NewsAPI country 파라미터 (대표 국가)
-  isRegion: boolean;      // true면 지역(대륙/권역), false면 개별 국가
+  flag: string;
+  apiCountry: string;   // NewsAPI country 파라미터 (대표 국가)
+  isRegion: boolean;
 }
 
 export const REGIONS: RegionInfo[] = [
@@ -34,7 +39,7 @@ export const REGIONS: RegionInfo[] = [
   { code: "africa", name: "아프리카", nameEn: "Africa", lat: 5.0, lng: 20.0, flag: "🌍", apiCountry: "za", isRegion: true },
 ];
 
-// ─── 뉴스 아이템 타입 ───
+// ─── 타입 ───
 
 export interface GlobalNewsItem {
   title: string;
@@ -44,21 +49,20 @@ export interface GlobalNewsItem {
   publishedAt: string;
   imageUrl: string | null;
   sentiment: "positive" | "negative" | "neutral";
-  sentimentScore: number; // -1 ~ 1
+  sentimentScore: number;
 }
 
 export interface RegionNewsResult {
   region: RegionInfo;
   articles: GlobalNewsItem[];
-  overallSentiment: number; // 0~100
+  overallSentiment: number;
   sentimentLabel: string;
   fetchedAt: number;
 }
 
-// backward compat
 export type CountryNewsResult = RegionNewsResult;
 
-// ─── 감성 분석 (키워드 기반) ───
+// ─── 감성 분석 ───
 
 const POSITIVE_KEYWORDS = [
   "surge", "soar", "rally", "gain", "rise", "growth", "boom", "record high",
@@ -75,131 +79,147 @@ const NEGATIVE_KEYWORDS = [
   "downturn", "bearish", "sell-off", "risk", "warn", "danger",
 ];
 
-function analyzeNewsSentiment(title: string, desc: string | null): { sentiment: "positive" | "negative" | "neutral"; score: number } {
+function analyzeNewsSentiment(title: string, desc: string | null) {
   const text = `${title} ${desc || ""}`.toLowerCase();
   let score = 0;
-
-  for (const kw of POSITIVE_KEYWORDS) {
-    if (text.includes(kw)) score += 1;
-  }
-  for (const kw of NEGATIVE_KEYWORDS) {
-    if (text.includes(kw)) score -= 1;
-  }
-
+  for (const kw of POSITIVE_KEYWORDS) if (text.includes(kw)) score += 1;
+  for (const kw of NEGATIVE_KEYWORDS) if (text.includes(kw)) score -= 1;
   const normalized = Math.max(-1, Math.min(1, score / 3));
-  const sentiment = normalized > 0.1 ? "positive" : normalized < -0.1 ? "negative" : "neutral";
-
+  const sentiment: "positive" | "negative" | "neutral" =
+    normalized > 0.1 ? "positive" : normalized < -0.1 ? "negative" : "neutral";
   return { sentiment, score: normalized };
 }
 
 // ─── 캐시 ───
 
 const newsCache = new Map<string, { data: RegionNewsResult; expiry: number }>();
-const CACHE_TTL = 30 * 60 * 1000; // 30분
+const CACHE_TTL = 30 * 60 * 1000;
 
-// ─── API 호출 ───
+// ─── 단일 NewsAPI 호출 헬퍼 ───
+
+async function callNewsAPI(url: string): Promise<any[] | null> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.error(`[GlobalNews] HTTP ${res.status}: ${body.slice(0, 200)}`);
+      return null;
+    }
+    const json = await res.json();
+    const articles = json.articles || [];
+    return articles.filter((a: any) => a.title && a.title !== "[Removed]");
+  } catch (e) {
+    console.error(`[GlobalNews] Fetch error:`, e);
+    return null;
+  }
+}
+
+function parseArticles(rawArticles: any[]): GlobalNewsItem[] {
+  return rawArticles.slice(0, 15).map((a: any) => {
+    const { sentiment, score } = analyzeNewsSentiment(a.title, a.description);
+    return {
+      title: a.title,
+      description: a.description,
+      url: a.url,
+      source: a.source?.name || "Unknown",
+      publishedAt: a.publishedAt,
+      imageUrl: a.urlToImage,
+      sentiment,
+      sentimentScore: score,
+    };
+  });
+}
+
+function buildResult(region: RegionInfo, articles: GlobalNewsItem[]): RegionNewsResult {
+  const avgScore = articles.length > 0
+    ? articles.reduce((sum, a) => sum + a.sentimentScore, 0) / articles.length
+    : 0;
+  const overallSentiment = Math.round((avgScore + 1) * 50);
+  const label = overallSentiment >= 65 ? "긍정적"
+    : overallSentiment >= 55 ? "약간 긍정"
+    : overallSentiment >= 45 ? "중립"
+    : overallSentiment >= 35 ? "약간 부정"
+    : "부정적";
+
+  return { region, articles, overallSentiment, sentimentLabel: label, fetchedAt: Date.now() };
+}
+
+// ─── 개별 지역 뉴스 (상세 보기 - 3단계 폴백) ───
 
 export async function fetchRegionNews(regionCode: string): Promise<RegionNewsResult | null> {
   const region = REGIONS.find((r) => r.code === regionCode);
   if (!region) return null;
 
-  // 캐시 확인
   const cached = newsCache.get(regionCode);
-  if (cached && Date.now() < cached.expiry) {
-    return cached.data;
-  }
+  if (cached && Date.now() < cached.expiry) return cached.data;
 
   if (!NEWSAPI_KEY) {
-    console.warn("[GlobalNews] NEWSAPI_KEY not set, returning mock data");
+    console.warn("[GlobalNews] NEWSAPI_KEY not set");
     return getMockNewsResult(region);
   }
 
-  try {
-    // 1차 시도: business 카테고리
-    let url = `https://newsapi.org/v2/top-headlines?country=${region.apiCountry}&category=business&pageSize=15&apiKey=${NEWSAPI_KEY}`;
-    let res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  // 1단계: business 카테고리
+  console.log(`[GlobalNews] Fetching ${regionCode} (${region.apiCountry}) - business`);
+  let raw = await callNewsAPI(
+    `https://newsapi.org/v2/top-headlines?country=${region.apiCountry}&category=business&pageSize=15&apiKey=${NEWSAPI_KEY}`
+  );
 
-    if (!res.ok) {
-      console.error(`[GlobalNews] API error ${res.status} for ${regionCode}`);
-      if (res.status === 429) {
-        return cached?.data || getMockNewsResult(region);
-      }
-      return getMockNewsResult(region);
-    }
+  // 2단계: 결과 없으면 카테고리 없이
+  if (!raw || raw.length === 0) {
+    console.log(`[GlobalNews] ${regionCode}: no business news, trying general`);
+    raw = await callNewsAPI(
+      `https://newsapi.org/v2/top-headlines?country=${region.apiCountry}&pageSize=15&apiKey=${NEWSAPI_KEY}`
+    );
+  }
 
-    let json = await res.json();
-    let rawArticles = json.articles || [];
+  // 3단계: 그래도 없으면 everything (권역만)
+  if ((!raw || raw.length === 0) && region.isRegion) {
+    console.log(`[GlobalNews] ${regionCode}: trying everything endpoint`);
+    const kw = encodeURIComponent(region.nameEn + " economy");
+    raw = await callNewsAPI(
+      `https://newsapi.org/v2/everything?q=${kw}&sortBy=publishedAt&pageSize=15&apiKey=${NEWSAPI_KEY}`
+    );
+  }
 
-    // 2차 시도: business 카테고리에 결과가 없으면 일반 뉴스로 재시도
-    if (rawArticles.length === 0) {
-      console.log(`[GlobalNews] No business news for ${regionCode}, trying general headlines`);
-      url = `https://newsapi.org/v2/top-headlines?country=${region.apiCountry}&pageSize=15&apiKey=${NEWSAPI_KEY}`;
-      res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-      if (res.ok) {
-        json = await res.json();
-        rawArticles = json.articles || [];
-      }
-    }
-
-    // 3차 시도: top-headlines에도 없으면 everything 엔드포인트로 키워드 검색
-    if (rawArticles.length === 0 && region.isRegion) {
-      console.log(`[GlobalNews] No headlines for ${regionCode}, trying everything endpoint`);
-      const keyword = encodeURIComponent(region.nameEn + " economy");
-      url = `https://newsapi.org/v2/everything?q=${keyword}&sortBy=publishedAt&pageSize=15&apiKey=${NEWSAPI_KEY}`;
-      res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-      if (res.ok) {
-        json = await res.json();
-        rawArticles = json.articles || [];
-      }
-    }
-
-    const articles: GlobalNewsItem[] = rawArticles
-      .filter((a: any) => a.title && a.title !== "[Removed]")
-      .slice(0, 15)
-      .map((a: any) => {
-        const { sentiment, score } = analyzeNewsSentiment(a.title, a.description);
-        return {
-          title: a.title,
-          description: a.description,
-          url: a.url,
-          source: a.source?.name || "Unknown",
-          publishedAt: a.publishedAt,
-          imageUrl: a.urlToImage,
-          sentiment,
-          sentimentScore: score,
-        };
-      });
-
-    const avgScore = articles.length > 0
-      ? articles.reduce((sum, a) => sum + a.sentimentScore, 0) / articles.length
-      : 0;
-    const overallSentiment = Math.round((avgScore + 1) * 50);
-
-    const label = overallSentiment >= 65 ? "긍정적"
-      : overallSentiment >= 55 ? "약간 긍정"
-      : overallSentiment >= 45 ? "중립"
-      : overallSentiment >= 35 ? "약간 부정"
-      : "부정적";
-
-    const result: RegionNewsResult = {
-      region,
-      articles,
-      overallSentiment,
-      sentimentLabel: label,
-      fetchedAt: Date.now(),
-    };
-
+  if (!raw || raw.length === 0) {
+    console.log(`[GlobalNews] ${regionCode}: all attempts returned empty`);
+    const result = getMockNewsResult(region);
     newsCache.set(regionCode, { data: result, expiry: Date.now() + CACHE_TTL });
     return result;
-  } catch (e) {
-    console.error(`[GlobalNews] Fetch error for ${regionCode}:`, e);
-    return cached?.data || getMockNewsResult(region);
   }
+
+  const articles = parseArticles(raw);
+  const result = buildResult(region, articles);
+  newsCache.set(regionCode, { data: result, expiry: Date.now() + CACHE_TTL });
+  return result;
 }
 
-// backward compat
 export async function fetchCountryNews(code: string): Promise<RegionNewsResult | null> {
   return fetchRegionNews(code);
+}
+
+// ─── 빠른 단일 호출 (요약용 - 폴백 없이 1회만) ───
+
+async function fetchRegionQuick(region: RegionInfo): Promise<RegionNewsResult> {
+  if (!NEWSAPI_KEY) return getMockNewsResult(region);
+
+  const cached = newsCache.get(region.code);
+  if (cached && Date.now() < cached.expiry) return cached.data;
+
+  // 카테고리 없이 top-headlines 1회만 (가장 넓은 범위, 결과 나올 확률 높음)
+  console.log(`[GlobalNews] Quick fetch: ${region.code} (${region.apiCountry})`);
+  const raw = await callNewsAPI(
+    `https://newsapi.org/v2/top-headlines?country=${region.apiCountry}&pageSize=10&apiKey=${NEWSAPI_KEY}`
+  );
+
+  if (!raw || raw.length === 0) {
+    return getMockNewsResult(region);
+  }
+
+  const articles = parseArticles(raw);
+  const result = buildResult(region, articles);
+  newsCache.set(region.code, { data: result, expiry: Date.now() + CACHE_TTL });
+  return result;
 }
 
 // ─── 모든 지역 요약 (지도 마커용) ───
@@ -223,32 +243,33 @@ export async function fetchAllCountrySummaries(): Promise<CountrySummary[]> {
     return summaryCache.data;
   }
 
-  // 주요 지역만 API 호출 (API 한도 100/day 절약)
-  // 나머지는 클릭 시 개별 로드
-  const primaryRegions = ["us", "kr", "jp", "cn", "eu", "middle_east"];
+  // 주요 6개 지역을 **병렬**로 호출 (각 1회 API 호출 = 총 6 req)
+  const primaryCodes = ["us", "kr", "jp", "cn", "eu", "middle_east"];
+  const primaryRegions = primaryCodes.map((c) => REGIONS.find((r) => r.code === c)!);
+
+  const newsResults = await Promise.all(
+    primaryRegions.map((region) => fetchRegionQuick(region))
+  );
+
   const results: CountrySummary[] = [];
 
-  // 주요 지역: 실제 API 호출 (최대 6개, 재시도 포함 ~12-18 req)
-  for (const code of primaryRegions) {
-    const news = await fetchRegionNews(code);
-    if (news) {
-      results.push({
-        code: news.region.code,
-        name: news.region.name,
-        nameEn: news.region.nameEn,
-        lat: news.region.lat,
-        lng: news.region.lng,
-        flag: news.region.flag,
-        sentiment: news.overallSentiment,
-        label: news.sentimentLabel,
-        articleCount: news.articles.length,
-      });
-    }
+  for (const news of newsResults) {
+    results.push({
+      code: news.region.code,
+      name: news.region.name,
+      nameEn: news.region.nameEn,
+      lat: news.region.lat,
+      lng: news.region.lng,
+      flag: news.region.flag,
+      sentiment: news.overallSentiment,
+      label: news.sentimentLabel,
+      articleCount: news.articles.length,
+    });
   }
 
-  // 나머지 지역: 기본값 표시 (클릭 시 개별 로드)
+  // 나머지 지역: 기본값 (클릭 시 개별 로드)
   for (const region of REGIONS) {
-    if (!primaryRegions.includes(region.code)) {
+    if (!primaryCodes.includes(region.code)) {
       results.push({
         code: region.code,
         name: region.name,
@@ -257,7 +278,7 @@ export async function fetchAllCountrySummaries(): Promise<CountrySummary[]> {
         lng: region.lng,
         flag: region.flag,
         sentiment: 50,
-        label: "클릭하여 로드",
+        label: "뉴스 로드 대기",
         articleCount: 0,
       });
     }
@@ -271,32 +292,30 @@ export async function fetchAllCountrySummaries(): Promise<CountrySummary[]> {
 // ─── Mock Data ───
 
 function getMockNewsResult(region: RegionInfo): RegionNewsResult {
-  const mockArticles: GlobalNewsItem[] = [
-    {
-      title: `${region.nameEn} markets show mixed signals amid global uncertainty`,
-      description: `Investors in ${region.nameEn} are watching key economic indicators closely as global markets navigate uncertain terrain.`,
-      url: "#",
-      source: "Mock News",
-      publishedAt: new Date().toISOString(),
-      imageUrl: null,
-      sentiment: "neutral",
-      sentimentScore: 0,
-    },
-    {
-      title: `${region.nameEn} economic outlook remains cautiously optimistic`,
-      description: `Analysts maintain a positive but measured view on ${region.nameEn}'s economic prospects for the coming quarter.`,
-      url: "#",
-      source: "Mock Finance",
-      publishedAt: new Date().toISOString(),
-      imageUrl: null,
-      sentiment: "positive",
-      sentimentScore: 0.3,
-    },
-  ];
-
   return {
     region,
-    articles: mockArticles,
+    articles: [
+      {
+        title: `${region.nameEn} markets show mixed signals amid global uncertainty`,
+        description: `Investors in ${region.nameEn} are watching key economic indicators closely.`,
+        url: "#",
+        source: "Mock News",
+        publishedAt: new Date().toISOString(),
+        imageUrl: null,
+        sentiment: "neutral",
+        sentimentScore: 0,
+      },
+      {
+        title: `${region.nameEn} economic outlook remains cautiously optimistic`,
+        description: `Analysts maintain a positive but measured view on ${region.nameEn}'s prospects.`,
+        url: "#",
+        source: "Mock Finance",
+        publishedAt: new Date().toISOString(),
+        imageUrl: null,
+        sentiment: "positive",
+        sentimentScore: 0.3,
+      },
+    ],
     overallSentiment: 55,
     sentimentLabel: "약간 긍정",
     fetchedAt: Date.now(),
