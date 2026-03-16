@@ -115,8 +115,9 @@ export async function fetchRegionNews(regionCode: string): Promise<RegionNewsRes
   }
 
   try {
-    const url = `https://newsapi.org/v2/top-headlines?country=${region.apiCountry}&category=business&pageSize=15&apiKey=${NEWSAPI_KEY}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    // 1차 시도: business 카테고리
+    let url = `https://newsapi.org/v2/top-headlines?country=${region.apiCountry}&category=business&pageSize=15&apiKey=${NEWSAPI_KEY}`;
+    let res = await fetch(url, { signal: AbortSignal.timeout(10000) });
 
     if (!res.ok) {
       console.error(`[GlobalNews] API error ${res.status} for ${regionCode}`);
@@ -126,8 +127,31 @@ export async function fetchRegionNews(regionCode: string): Promise<RegionNewsRes
       return getMockNewsResult(region);
     }
 
-    const json = await res.json();
-    const rawArticles = json.articles || [];
+    let json = await res.json();
+    let rawArticles = json.articles || [];
+
+    // 2차 시도: business 카테고리에 결과가 없으면 일반 뉴스로 재시도
+    if (rawArticles.length === 0) {
+      console.log(`[GlobalNews] No business news for ${regionCode}, trying general headlines`);
+      url = `https://newsapi.org/v2/top-headlines?country=${region.apiCountry}&pageSize=15&apiKey=${NEWSAPI_KEY}`;
+      res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+      if (res.ok) {
+        json = await res.json();
+        rawArticles = json.articles || [];
+      }
+    }
+
+    // 3차 시도: top-headlines에도 없으면 everything 엔드포인트로 키워드 검색
+    if (rawArticles.length === 0 && region.isRegion) {
+      console.log(`[GlobalNews] No headlines for ${regionCode}, trying everything endpoint`);
+      const keyword = encodeURIComponent(region.nameEn + " economy");
+      url = `https://newsapi.org/v2/everything?q=${keyword}&sortBy=publishedAt&pageSize=15&apiKey=${NEWSAPI_KEY}`;
+      res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+      if (res.ok) {
+        json = await res.json();
+        rawArticles = json.articles || [];
+      }
+    }
 
     const articles: GlobalNewsItem[] = rawArticles
       .filter((a: any) => a.title && a.title !== "[Removed]")
@@ -199,11 +223,14 @@ export async function fetchAllCountrySummaries(): Promise<CountrySummary[]> {
     return summaryCache.data;
   }
 
-  // 모든 12개 지역 API 호출 (캐시 덕분에 실제 API 호출은 최소화)
+  // 주요 지역만 API 호출 (API 한도 100/day 절약)
+  // 나머지는 클릭 시 개별 로드
+  const primaryRegions = ["us", "kr", "jp", "cn", "eu", "middle_east"];
   const results: CountrySummary[] = [];
 
-  for (const region of REGIONS) {
-    const news = await fetchRegionNews(region.code);
+  // 주요 지역: 실제 API 호출 (최대 6개, 재시도 포함 ~12-18 req)
+  for (const code of primaryRegions) {
+    const news = await fetchRegionNews(code);
     if (news) {
       results.push({
         code: news.region.code,
@@ -215,6 +242,23 @@ export async function fetchAllCountrySummaries(): Promise<CountrySummary[]> {
         sentiment: news.overallSentiment,
         label: news.sentimentLabel,
         articleCount: news.articles.length,
+      });
+    }
+  }
+
+  // 나머지 지역: 기본값 표시 (클릭 시 개별 로드)
+  for (const region of REGIONS) {
+    if (!primaryRegions.includes(region.code)) {
+      results.push({
+        code: region.code,
+        name: region.name,
+        nameEn: region.nameEn,
+        lat: region.lat,
+        lng: region.lng,
+        flag: region.flag,
+        sentiment: 50,
+        label: "클릭하여 로드",
+        articleCount: 0,
       });
     }
   }
