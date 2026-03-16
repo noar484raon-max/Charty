@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { getWorldMapPath } from "./continent-paths";
+import { getWorldMapPath, projectPoint } from "./continent-paths";
 
 export interface MapCountry {
   code: string;
@@ -20,12 +20,9 @@ interface WorldMapProps {
   onSelectCountry: (code: string) => void;
 }
 
+// Equirectangular projection - 대륙 경로와 동일한 공식 사용
 function project(lat: number, lng: number): [number, number] {
-  const x = ((lng + 180) / 360) * 1000;
-  const latRad = (lat * Math.PI) / 180;
-  const mercY = Math.log(Math.tan(Math.PI / 4 + latRad / 2));
-  const y = 500 - (mercY / Math.PI) * 400;
-  return [Math.max(10, Math.min(990, x)), Math.max(20, Math.min(680, y))];
+  return projectPoint(lat, lng);
 }
 
 function sentimentColor(s: number): string {
@@ -40,7 +37,7 @@ export default function WorldMap({ countries, selectedCountry, onSelectCountry }
 
   return (
     <div className="relative w-full h-full">
-      <svg viewBox="0 0 1000 700" className="w-full h-full" preserveAspectRatio="xMidYMid meet">
+      <svg viewBox="0 0 1000 620" className="w-full h-full" preserveAspectRatio="xMidYMid meet">
         <defs>
           <radialGradient id="mapBg" cx="50%" cy="45%" r="60%">
             <stop offset="0%" stopColor="#0e1525" />
@@ -52,29 +49,29 @@ export default function WorldMap({ countries, selectedCountry, onSelectCountry }
           </filter>
         </defs>
 
-        <rect width="1000" height="700" fill="url(#mapBg)" />
+        <rect width="1000" height="620" fill="url(#mapBg)" />
 
         {/* 위도 그리드 */}
-        {[-60, -30, 0, 30, 60].map((lat) => {
+        {[-45, -30, -15, 0, 15, 30, 45, 60, 75].map((lat) => {
           const [, y] = project(lat, 0);
-          return <line key={`la${lat}`} x1="20" y1={y} x2="980" y2={y}
-            stroke="#141c2e" strokeWidth="0.5" strokeDasharray="2,6" />;
+          return <line key={`la${lat}`} x1="0" y1={y} x2="1000" y2={y}
+            stroke="#141c2e" strokeWidth="0.4" strokeDasharray="2,8" />;
         })}
         {/* 경도 그리드 */}
         {[-150,-120,-90,-60,-30,0,30,60,90,120,150].map((lng) => {
           const [x] = project(0, lng);
-          return <line key={`lo${lng}`} x1={x} y1="20" x2={x} y2="680"
-            stroke="#141c2e" strokeWidth="0.5" strokeDasharray="2,6" />;
+          return <line key={`lo${lng}`} x1={x} y1="30" x2={x} y2="590"
+            stroke="#141c2e" strokeWidth="0.4" strokeDasharray="2,8" />;
         })}
 
         {/* ★ 대륙 윤곽선 (Natural Earth 110m) ★ */}
         <path
           d={landPath}
-          fill="#0d2137"
-          stroke="#1b5a6a"
-          strokeWidth="0.8"
+          fill="#132d46"
+          stroke="#2a7a8a"
+          strokeWidth="0.6"
           strokeLinejoin="round"
-          opacity="0.95"
+          fillRule="evenodd"
         />
 
         {/* 국가 마커 */}
