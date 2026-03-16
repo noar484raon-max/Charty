@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchCountryNews, fetchAllCountrySummaries } from "@/server/services/global-news";
+import { fetchRegionNews, fetchAllCountrySummaries } from "@/server/services/global-news";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -16,9 +16,9 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "country parameter required" }, { status: 400 });
     }
 
-    const data = await fetchCountryNews(country);
+    const data = await fetchRegionNews(country);
     if (!data) {
-      return NextResponse.json({ error: "Unknown country code" }, { status: 404 });
+      return NextResponse.json({ error: "Unknown region code" }, { status: 404 });
     }
 
     return NextResponse.json(data);

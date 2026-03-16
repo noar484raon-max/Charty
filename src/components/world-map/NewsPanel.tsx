@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import type { CountryNewsResult, GlobalNewsItem } from "@/server/services/global-news";
+import type { RegionNewsResult, GlobalNewsItem } from "@/server/services/global-news";
 
 interface NewsPanelProps {
   countryCode: string | null;
@@ -64,7 +64,7 @@ function NewsRow({ article }: { article: GlobalNewsItem }) {
 }
 
 export default function NewsPanel({ countryCode }: NewsPanelProps) {
-  const [data, setData] = useState<CountryNewsResult | null>(null);
+  const [data, setData] = useState<RegionNewsResult | null>(null);
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
@@ -73,7 +73,7 @@ export default function NewsPanel({ countryCode }: NewsPanelProps) {
     try {
       const res = await fetch(`/api/global-news?country=${countryCode}`);
       const json = await res.json();
-      if (json?.country) setData(json);
+      if (json?.region) setData(json);
     } catch { setData(null); }
     setLoading(false);
   }, [countryCode]);
@@ -84,9 +84,9 @@ export default function NewsPanel({ countryCode }: NewsPanelProps) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center px-6 py-12">
         <div className="text-4xl mb-3">🌍</div>
-        <div className="text-[15px] font-bold text-zinc-300 mb-1">국가를 선택하세요</div>
+        <div className="text-[15px] font-bold text-zinc-300 mb-1">지역을 선택하세요</div>
         <div className="text-[12px] text-zinc-500 max-w-[240px]">
-          지도에서 국가 마커를 클릭하면 해당 국가의 실시간 비즈니스 뉴스와 감성 분석을 볼 수 있습니다
+          지도에서 지역 마커를 클릭하면 해당 지역의 실시간 비즈니스 뉴스와 감성 분석을 볼 수 있습니다
         </div>
       </div>
     );
@@ -113,14 +113,14 @@ export default function NewsPanel({ countryCode }: NewsPanelProps) {
 
   return (
     <div className="h-full overflow-y-auto">
-      {/* 국가 헤더 */}
+      {/* 지역 헤더 */}
       <div className="sticky top-0 bg-surface/95 backdrop-blur-sm border-b border-white/[0.06] px-4 py-3 z-10">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <span className="text-2xl">{data.country.flag}</span>
+            <span className="text-2xl">{data.region.flag}</span>
             <div>
-              <div className="text-[15px] font-bold text-zinc-100">{data.country.name}</div>
-              <div className="text-[11px] text-zinc-500">{data.country.nameEn} · 비즈니스 뉴스</div>
+              <div className="text-[15px] font-bold text-zinc-100">{data.region.name}</div>
+              <div className="text-[11px] text-zinc-500">{data.region.nameEn} · 비즈니스 뉴스</div>
             </div>
           </div>
           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${sentColor}`}>

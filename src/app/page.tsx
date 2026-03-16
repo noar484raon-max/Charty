@@ -7,13 +7,17 @@ import type { CountrySummary } from "@/server/services/global-news";
 
 const QUICK_SELECT = [
   { code: "us", flag: "🇺🇸", name: "미국" },
-  { code: "gb", flag: "🇬🇧", name: "영국" },
-  { code: "jp", flag: "🇯🇵", name: "일본" },
   { code: "kr", flag: "🇰🇷", name: "한국" },
+  { code: "jp", flag: "🇯🇵", name: "일본" },
   { code: "cn", flag: "🇨🇳", name: "중국" },
-  { code: "de", flag: "🇩🇪", name: "독일" },
-  { code: "fr", flag: "🇫🇷", name: "프랑스" },
-  { code: "in", flag: "🇮🇳", name: "인도" },
+  { code: "eu", flag: "🇪🇺", name: "EU" },
+  { code: "middle_east", flag: "🕌", name: "중동" },
+  { code: "southeast_asia", flag: "🌏", name: "동남아" },
+  { code: "ru", flag: "🇷🇺", name: "러시아" },
+  { code: "ca", flag: "🇨🇦", name: "캐나다" },
+  { code: "south_america", flag: "🌎", name: "남미" },
+  { code: "africa", flag: "🌍", name: "아프리카" },
+  { code: "oceania", flag: "🌏", name: "오세아니아" },
 ];
 
 export default function GlobalNewsPage() {
@@ -50,7 +54,7 @@ export default function GlobalNewsPage() {
             </span>
           </div>
 
-          {/* 국가 빠른 선택 */}
+          {/* 지역 빠른 선택 */}
           <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-hide">
             {QUICK_SELECT.map((c) => (
               <button key={c.code}
@@ -86,7 +90,7 @@ export default function GlobalNewsPage() {
           )}
         </div>
 
-        {/* 하단 국가 감성 요약 (데스크톱) */}
+        {/* 하단 지역 감성 요약 (데스크톱) */}
         <div className="hidden md:block px-6 pb-4">
           <div className="flex gap-2 overflow-x-auto scrollbar-hide">
             {countries.filter((c) => c.articleCount > 0).map((c) => (
