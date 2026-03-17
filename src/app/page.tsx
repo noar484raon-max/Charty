@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import WorldMap from "@/components/world-map/WorldMap";
 import NewsPanel from "@/components/world-map/NewsPanel";
+import FearGreedBar from "@/components/FearGreedBar";
 import type { CountrySummary } from "@/server/services/global-news";
 
 const QUICK_SELECT = [
@@ -52,6 +53,11 @@ export default function GlobalNewsPage() {
             <span className="hidden sm:block text-xs text-zinc-500 bg-surface border border-white/[0.06] rounded-full px-2.5 py-0.5">
               실시간 글로벌 뉴스 감성
             </span>
+          </div>
+
+          {/* 공포·탐욕 지수 바 */}
+          <div className="mb-3">
+            <FearGreedBar />
           </div>
 
           {/* 지역 빠른 선택 */}
