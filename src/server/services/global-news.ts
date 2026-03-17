@@ -34,7 +34,7 @@ export const REGIONS: RegionInfo[] = [
   { code: "jp", name: "일본", nameEn: "Japan", lat: 36.0, lng: 138.0, flag: "🇯🇵", apiCountry: "jp", apiLang: "ja", isRegion: false },
   { code: "ru", name: "러시아", nameEn: "Russia", lat: 60.0, lng: 90.0, flag: "🇷🇺", apiCountry: "ru", apiLang: "ru", isRegion: false },
   { code: "cn", name: "중국", nameEn: "China", lat: 35.0, lng: 105.0, flag: "🇨🇳", apiCountry: "cn", apiLang: "zh", isRegion: false },
-  { code: "middle_east", name: "중동", nameEn: "Middle East", lat: 26.0, lng: 45.0, flag: "🕌", apiCountry: "ae", apiLang: "ar", isRegion: true },
+  { code: "middle_east", name: "중동", nameEn: "Middle East", lat: 26.0, lng: 45.0, flag: "🕌", apiCountry: "eg", apiLang: "ar", isRegion: true },
   { code: "eu", name: "EU", nameEn: "European Union", lat: 50.0, lng: 10.0, flag: "🇪🇺", apiCountry: "de", apiLang: "de", isRegion: true },
   { code: "africa", name: "아프리카", nameEn: "Africa", lat: 5.0, lng: 20.0, flag: "🌍", apiCountry: "za", apiLang: "en", isRegion: true },
 ];
