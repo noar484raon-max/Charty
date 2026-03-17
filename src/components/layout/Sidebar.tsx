@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import {
   Globe,
+  FileText,
   BarChart3,
   Star,
   MessageCircle,
@@ -14,6 +15,7 @@ import { useAuth } from "@/components/providers/AuthProvider";
 
 const NAV_ITEMS = [
   { href: "/", icon: Globe, label: "글로벌 뉴스" },
+  { href: "/reports", icon: FileText, label: "기업 리포트" },
   { href: "/chart", icon: BarChart3, label: "차트" },
   { href: "/watchlist", icon: Star, label: "관심종목" },
   { href: "/community", icon: MessageCircle, label: "커뮤니티" },
