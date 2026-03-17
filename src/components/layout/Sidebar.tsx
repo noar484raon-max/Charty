@@ -38,7 +38,7 @@ export default function Sidebar() {
         {/* Logo */}
         <Link href="/" className="mb-8 group">
           <div className="text-xl font-extrabold tracking-tight transition-transform group-hover:scale-110">
-            C<span className="text-accent">y</span>
+            P<span className="text-accent">u</span>
           </div>
         </Link>
 

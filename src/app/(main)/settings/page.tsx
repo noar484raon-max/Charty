@@ -145,8 +145,8 @@ export default function SettingsPage() {
         <section className="bg-surface border border-white/[0.06] rounded-2xl p-5">
           <h2 className="text-sm font-bold mb-2">앱 정보</h2>
           <div className="text-xs text-zinc-500 space-y-1">
-            <div>Charty v0.1.0 (프로토타입)</div>
-            <div>차트 위에 인사이트를 핀하세요</div>
+            <div>Pulsify v0.2.0</div>
+            <div>글로벌 시장의 맥박을 읽다</div>
           </div>
         </section>
       </div>

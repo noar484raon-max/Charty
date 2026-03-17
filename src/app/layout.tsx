@@ -9,11 +9,11 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 const jetbrainsMono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono" });
 
 export const metadata: Metadata = {
-  title: "Charty — 차트 위에 인사이트를 핀하세요",
-  description: "주식/암호화폐 차트에 메모를 남겨 투자 인사이트를 공유하는 소셜 트레이딩 플랫폼",
+  title: "Pulsify — 글로벌 시장의 맥박을 읽다",
+  description: "글로벌 뉴스 감성 분석, 기업 실적 리포트, 차트 인사이트를 한눈에 보는 투자 플랫폼",
   openGraph: {
-    title: "Charty",
-    description: "차트 위에 인사이트를 핀하세요",
+    title: "Pulsify",
+    description: "글로벌 시장의 맥박을 읽다",
     type: "website",
   },
 };
